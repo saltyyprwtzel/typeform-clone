@@ -3,8 +3,9 @@
 import { useParams } from "next/navigation";
 import { Suspense } from "react";
 import { useEffect, useRef, useState } from "react";
+import { ThemeSwitcher } from "../../theme-system";
 
-type Question = { id: string; type: string; title: string; description?: string; required?: boolean; options?: string[] };
+type Question = { id: string; type: string; title: string; description?: string; required?: boolean; options?: string[]; ratingMax?: number };
 type PublicForm = { id: string; title: string; questions: Question[] };
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -82,15 +83,15 @@ function PublicFormContent() {
     return () => window.removeEventListener("keydown", handler);
   });
 
-  if (loading || !form) return <main className="respondent-shell"><div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">f</span>formcraft</span></div><section className="respondent-content" aria-live="polite"><h1>{loading ? "Loading your form…" : error}</h1>{!loading && <button className="button quiet" onClick={() => { setForm(null); setError(""); setLoading(true); setLoadAttempt((attempt) => attempt + 1); }}>Try again</button>}</section><footer className="respondent-footer"><span>Powered by <b>formcraft</b></span></footer></main>;
-  if (done) return <main className="respondent-shell thank-you"><div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">f</span>{form.title}</span></div><div className="thank-you-card"><span className="thank-you-mark">✳</span><span className="overline">RESPONSE COMPLETE</span><h1>Thank you for your time.</h1><p>Your answers have been submitted.</p></div><footer className="respondent-footer"><span>Powered by <b>formcraft</b></span></footer></main>;
-  if (!current) return <main className="respondent-shell"><section className="respondent-content"><h1>This form has no questions yet.</h1></section></main>;
+  if (loading || !form) return <main className="respondent-shell"><div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">f</span>formcraft</span><ThemeSwitcher variant="respondent" /></div><section className="respondent-content" aria-live="polite"><h1>{loading ? "Loading your form…" : error}</h1>{!loading && <button className="button quiet" onClick={() => { setForm(null); setError(""); setLoading(true); setLoadAttempt((attempt) => attempt + 1); }}>Try again</button>}</section><footer className="respondent-footer"><span>Powered by <b>formcraft</b></span></footer></main>;
+  if (done) return <main className="respondent-shell thank-you"><div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">f</span>{form.title}</span><ThemeSwitcher variant="respondent" /></div><div className="thank-you-card"><span className="thank-you-mark">✳</span><span className="overline">RESPONSE COMPLETE</span><h1>Thank you for your time.</h1><p>Your answers have been submitted.</p></div><footer className="respondent-footer"><span>Powered by <b>formcraft</b></span></footer></main>;
+  if (!current) return <main className="respondent-shell"><div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">f</span>{form.title}</span><ThemeSwitcher variant="respondent" /></div><section className="respondent-content"><h1>This form has no questions yet.</h1></section></main>;
 
   const selected = answers[current.id] ?? "";
   const choose = (value: string) => setAnswer(value);
   const progress = Math.round(((index + 1) / form.questions.length) * 100);
   return <main className="respondent-shell">
-    <div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">f</span><span>{form.title}</span></span><span className="respondent-step">{String(index + 1).padStart(2, "0")} <i>/</i> {String(form.questions.length).padStart(2, "0")}</span><span className="respondent-exit" /></div>
+    <div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">f</span><span>{form.title}</span></span><span className="respondent-step">{String(index + 1).padStart(2, "0")} <i>/</i> {String(form.questions.length).padStart(2, "0")}</span><ThemeSwitcher variant="respondent" /></div>
     <div className="respondent-progress" role="progressbar" aria-label="Form progress" aria-valuemin={0} aria-valuemax={form.questions.length} aria-valuenow={index + 1}><span style={{ width: `${progress}%` }} /></div>
     <section className={`respondent-content ${direction}`} key={current.id}>
       <div className="respondent-question-number">{String(index + 1).padStart(2, "0")} <span>→</span></div><h1>{current.title}<sup>{current.required ? "*" : ""}</sup></h1>
@@ -99,7 +100,7 @@ function PublicFormContent() {
         {current.type === "multiple_choice" && <div className="respondent-options" role="group" aria-label="Answer choices">{(current.options ?? []).map((option, n) => <button key={n} className={`respondent-option ${selected === option ? "selected" : ""}`} onClick={() => choose(option)}><span>{String.fromCharCode(65 + n)}</span>{option}</button>)}</div>}
         {current.type === "dropdown" && <select className="respondent-select" value={selected} onChange={(event) => setAnswer(event.target.value)}><option value="" disabled>Select an option…</option>{(current.options ?? []).map((option, n) => <option key={n} value={option}>{option}</option>)}</select>}
         {current.type === "yes_no" && <div className="respondent-options horizontal">{["Yes", "No"].map((option, n) => <button key={option} className={`respondent-option ${selected === option ? "selected" : ""}`} onClick={() => choose(option)}><span>{n ? "B" : "A"}</span>{option}</button>)}</div>}
-        {current.type === "rating" && <div className="rating-options" role="radiogroup" aria-label="Choose a rating">{Array.from({ length: 10 }, (_, n) => String(n + 1)).map((n) => <button key={n} role="radio" aria-checked={selected === n} className={selected === n ? "selected" : ""} onClick={() => setAnswer(n)}>{n}</button>)}</div>}
+        {current.type === "rating" && <div className="rating-options" role="radiogroup" aria-label="Choose a rating">{Array.from({ length: current.ratingMax ?? 10 }, (_, n) => String(n + 1)).map((n) => <button key={n} role="radio" aria-checked={selected === n} className={selected === n ? "selected" : ""} onClick={() => setAnswer(n)}>{n}</button>)}</div>}
         {current.type === "long_text" && <textarea autoFocus className="respondent-textarea" placeholder="Type your answer here…" value={selected} onChange={(event) => setAnswer(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); confirmAnswer(); } }} />}
         {["short_text", "email", "number"].includes(current.type) && <input autoFocus className="respondent-input" type={current.type === "email" ? "email" : current.type === "number" ? "number" : "text"} placeholder={current.type === "email" ? "name@example.com" : "Type your answer here…"} value={selected} onChange={(event) => setAnswer(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); confirmAnswer(); } }} />}
       </div>
@@ -110,7 +111,7 @@ function PublicFormContent() {
 }
 
 export default function PublicFormPage() {
-  return <Suspense fallback={<main className="respondent-shell"><section className="respondent-content"><h1>Loading your form…</h1></section></main>}><PublicFormContent /></Suspense>;
+  return <Suspense fallback={<main className="respondent-shell"><div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">f</span>formcraft</span><ThemeSwitcher variant="respondent" /></div><section className="respondent-content"><h1>Loading your form…</h1></section></main>}><PublicFormContent /></Suspense>;
 }
 
 function validate(question: Question, value: string): string {
@@ -120,6 +121,6 @@ function validate(question: Question, value: string): string {
   if (question.type === "number" && !Number.isFinite(Number(value))) return "Enter a valid number.";
   if (["multiple_choice", "dropdown"].includes(question.type) && !(question.options ?? []).includes(value)) return "Choose one of the available options.";
   if (question.type === "yes_no" && value !== "Yes" && value !== "No") return "Choose Yes or No.";
-  if (question.type === "rating" && (!Number.isInteger(Number(value)) || Number(value) < 1 || Number(value) > 10)) return "Choose a rating from 1 to 10.";
+  if (question.type === "rating" && (!Number.isInteger(Number(value)) || Number(value) < 1 || Number(value) > (question.ratingMax ?? 10))) return `Choose a rating from 1 to ${question.ratingMax ?? 10}.`;
   return "";
 }

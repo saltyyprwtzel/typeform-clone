@@ -7,5 +7,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body>{children}</body></html>;
+  return <html lang="en" data-theme="fall" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: `(function(){try{var t=localStorage.getItem("formcraft-theme");var allowed=["light","dark","spring","summer","fall","winter"];document.documentElement.setAttribute("data-theme",allowed.indexOf(t)>-1?t:"fall")}catch(e){document.documentElement.setAttribute("data-theme","fall")}})()` }} /></head><body>{children}</body></html>;
 }
