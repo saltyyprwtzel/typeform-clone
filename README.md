@@ -1,60 +1,95 @@
 # Formcraft
 
-A Typeform-inspired form builder and conversational respondent experience built for the Scaler full-stack assessment.
+Formcraft is a Typeform-inspired form builder and one-question-at-a-time respondent experience built for the Scaler full-stack assessment. It supports creating and publishing forms, collecting public responses, and reviewing results.
 
-## Stack
+## Technology
 
-- `frontend/`: Next.js App Router, React, TypeScript, custom CSS
-- `backend/`: FastAPI and Python
-- Storage: SQLite, with normalized `forms` and `responses` tables
+- **Frontend:** Next.js App Router, React, TypeScript, CSS
+- **Backend:** FastAPI, Python, Pydantic
+- **Persistence:** SQLite (`forms` and `responses` tables)
 
 ## Run locally
 
-Start the API in one terminal:
+Prerequisites: Node.js/npm and Python 3.10+.
+
+Start the API in PowerShell:
 
 ```powershell
 cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-Start the UI in another terminal:
+Start the frontend in a second terminal:
 
 ```powershell
 cd frontend
-npm install
+Copy-Item .env.example .env.local
+npm ci
 npm run dev
 ```
 
-Open `http://localhost:3000`. The frontend can run without the API using local browser storage, but published share links and cross-device submissions require the API. The first launch seeds example forms and answers in the browser and syncs them to SQLite.
+Open `http://localhost:3000`. The API is available at `http://localhost:8000`; interactive API documentation is at `http://localhost:8000/docs`.
 
-## Architecture
+The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`). The backend reads `FORMCRAFT_CORS_ORIGINS` (comma-separated allowed origins) and `FORMCRAFT_DB` (SQLite file path). See `frontend/.env.example` and `backend/.env.example`. The backend's default database is `backend/formcraft.sqlite3` when run from the repository's `backend` directory.
 
-The Next.js app contains the creator dashboard, visual question editor, results summaries, and public respondent route at `/f/[id]`. The browser keeps a local copy for quick editing and synchronizes the form definitions with FastAPI. Public forms are loaded from the API by ID; submitted answers are validated and stored server-side.
+## Project structure
 
-The FastAPI application exposes JSON endpoints under `/api`. CORS is configured for the local frontend at `http://localhost:3000`. Set `NEXT_PUBLIC_API_URL` in `frontend/.env.local` if the API is hosted elsewhere. Set `FORMCRAFT_CORS_ORIGINS` to a comma-separated list of allowed frontend origins, and `FORMCRAFT_DB` to choose a SQLite file path.
+```text
+frontend/app/page.tsx       Creator dashboard, builder, preview, settings, and results
+frontend/app/f/[id]/page.tsx Public respondent form
+frontend/app/theme-system.tsx Six-theme state and switcher
+frontend/app/globals.css    Application styling and theme tokens
+backend/app/main.py         FastAPI app, routes, and submission validation
+backend/app/database.py     SQLite schema, seed data, and persistence functions
+```
 
-## Schema
+## Architecture and data
 
-- `forms`: `id` (text primary key), `title`, `status`, `updated`, `questions_json`
-- `responses`: integer primary key, `form_id` (foreign key with cascade delete), `submitted_at`, `answers_json`
+The creator dashboard, builder, results, and settings are client-side views managed by the Next.js page at `/` (the selected view and form ID are reflected in query parameters). Public respondents use `/f/{form_id}`. The browser calls the FastAPI JSON API using `NEXT_PUBLIC_API_URL`.
 
-Question definitions and answer maps are JSON so new question types can be added without schema migrations. Responses are separate rows so they can be queried and counted per form.
+SQLite contains:
 
-## API overview
+- `forms`: text `id` primary key, `title`, `status` (`Draft` or `Published`), `updated`, and `questions_json`.
+- `responses`: integer `id` primary key, `form_id` foreign key (cascade delete), `submitted_at`, and `answers_json`.
 
-- `GET /api/health` — health check
-- `GET /api/forms` — list forms with stored responses
-- `POST /api/forms/sync` — synchronize creator-side form definitions
-- `DELETE /api/forms/{id}` — delete a form and its responses
-- `GET /api/public/{id}` — retrieve a published form for respondents
-- `POST /api/public/{id}/responses` — validate and save a public response
+Question definitions are JSON objects with stable question IDs. Each response's `answers_json` maps those IDs to answer strings. Forms are synchronized with an upsert-only endpoint; explicit form deletion uses `DELETE /api/forms/{form_id}` and cascades to its responses.
 
-## Assumptions and current scope
+On a fresh database, backend startup idempotently seeds two published evaluator forms (`welcome` and `event`), each with all eight question types and two sample responses. Existing forms with those IDs are left as-is. The frontend uses these same starter forms as display/offline demos if the API is empty or unavailable; displaying fallback data alone does not sync it back to SQLite. If the API is unavailable, browser `localStorage` can provide the creator's local forms.
 
-- The creator is a default local user; authentication is not implemented.
-- Drafts, question settings, form themes, integrations, and advanced branching are intentionally limited to the assessment's core flow.
-- Local browser storage is a resilient fallback when the backend is not running.
-- The UI is an original Typeform-inspired implementation and does not use Typeform's proprietary assets.
+## API
+
+All routes are served by the FastAPI backend:
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/health` | Health check. |
+| `GET` | `/api/forms` | List creator forms and their stored responses. |
+| `POST` | `/api/forms/sync` | Upsert submitted form definitions and append newly supplied responses; omitted forms are not deleted. |
+| `DELETE` | `/api/forms/{form_id}` | Explicitly delete a form and its responses. |
+| `GET` | `/api/public/{form_id}` | Return a published form's public definition. |
+| `POST` | `/api/public/{form_id}/responses` | Validate and persist a completed public response. |
+
+## Implemented capabilities
+
+- Create, edit, rename, duplicate, delete, publish, and preview forms.
+- Eight question types: short text, long text, multiple choice, dropdown, email, number, yes/no, and rating.
+- Reorder builder questions by drag-and-drop or keyboard controls; edit question text, options, descriptions, and required state.
+- Public, sequential respondent experience with progress, Back/OK navigation, keyboard shortcuts, answer confirmation, and an explicit final Submit action. Respondents do not need an account. Builder preview is simulated and does not create a stored response.
+- Client- and server-side validation for required answers, email format, finite numbers, allowed choice values, yes/no values, and rating range.
+- Results summary with response counts, per-question choice distributions, number summaries (average, median, range), free-text answers, searchable individual responses, and CSV export.
+- Six workspace themes (Light, Dark, Spring, Summer, Fall, Winter), including dark mode. The selected theme is stored in browser `localStorage` and is not a per-form theme.
+
+## Deployment and assumptions
+
+The known production API is `https://typeform-clone-api-332f.onrender.com`. The frontend is deployed separately on Vercel. Set `NEXT_PUBLIC_API_URL` in Vercel to the API URL, and configure `FORMCRAFT_CORS_ORIGINS` on Render with the frontend's origin. Deployment settings are managed in the hosting dashboards; this repository contains no Render or Vercel deployment manifest.
+
+SQLite is a file database. For persistence across Render restarts/redeploys, attach a persistent disk and set `FORMCRAFT_DB` to a path on its mount (for example, `/var/data/formcraft.sqlite3` when the disk is mounted at `/var/data`). Without a persistent disk, Render's filesystem may be ephemeral.
+
+Creator authentication is intentionally simplified: the app presents a single default workspace/creator and does not implement login, accounts, or access control. Public respondent forms require no login.
+
+## Not implemented / out of scope
+
+Conditional branching, file uploads, partial-response saving/resume, creator authentication, multi-user collaboration, and third-party integrations are not implemented. Navigation entries for some future workspace areas are placeholders. Results provide basic summaries, not advanced analytics.
