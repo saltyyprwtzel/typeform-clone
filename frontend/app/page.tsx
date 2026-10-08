@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { setTheme, ThemeSwitcher, themes, useTheme, type Theme } from "./theme-system";
 
 type QuestionType = "short_text" | "long_text" | "multiple_choice" | "dropdown" | "email" | "number" | "yes_no" | "rating";
@@ -8,6 +8,28 @@ type Question = { id: string; type: QuestionType; title: string; required: boole
 type FormData = { id: string; title: string; updated: string; status: "Draft" | "Published"; questions: Question[]; responses: Record<string, string>[]; responseDates?: string[] };
 type View = "dashboard" | "builder" | "results" | "settings";
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const WORKSPACE_NAME_KEY = "formcraft-workspace-name";
+const DEFAULT_WORKSPACE_NAME = "My workspace";
+let workspaceNameSnapshot: string | undefined;
+const getWorkspaceNameSnapshot = () => {
+  if (workspaceNameSnapshot !== undefined) return workspaceNameSnapshot;
+  try {
+    workspaceNameSnapshot = window.localStorage.getItem(WORKSPACE_NAME_KEY)?.trim() || DEFAULT_WORKSPACE_NAME;
+  } catch {
+    workspaceNameSnapshot = DEFAULT_WORKSPACE_NAME;
+  }
+  return workspaceNameSnapshot;
+};
+const getWorkspaceNameServerSnapshot = () => DEFAULT_WORKSPACE_NAME;
+const subscribeWorkspaceName = (onChange: () => void) => {
+  const onStorage = () => { workspaceNameSnapshot = undefined; onChange(); };
+  window.addEventListener("storage", onStorage);
+  window.addEventListener("workspace-name-change", onChange);
+  return () => {
+    window.removeEventListener("storage", onStorage);
+    window.removeEventListener("workspace-name-change", onChange);
+  };
+};
 const questionTypes: { type: QuestionType; label: string; icon: string; placeholder: string }[] = [
   { type: "short_text", label: "Short text", icon: "T", placeholder: "Type your answer here" },
   { type: "long_text", label: "Long text", icon: "¶", placeholder: "Type a longer answer here" },
@@ -73,6 +95,7 @@ export default function Home() {
   // Keep persisted/offline forms separate from display-only demo fallback data.
   const [forms, setForms] = useState<FormData[]>([]);
   const [view, setView] = useState<View>("dashboard");
+  const workspaceName = useSyncExternalStore(subscribeWorkspaceName, getWorkspaceNameSnapshot, getWorkspaceNameServerSnapshot);
   const theme = useTheme();
   const [activeId, setActiveId] = useState("");
   const [selectedQuestion, setSelectedQuestion] = useState("");
@@ -87,6 +110,18 @@ export default function Home() {
   const [shareFormId, setShareFormId] = useState("");
 
   const chooseTheme = (nextTheme: Theme) => setTheme(nextTheme);
+
+  const renameWorkspace = (name: string) => {
+    const nextName = name.trim();
+    if (!nextName) return;
+    workspaceNameSnapshot = nextName;
+    try {
+      window.localStorage.setItem(WORKSPACE_NAME_KEY, nextName);
+    } catch {
+      // The in-memory name still updates if storage is unavailable.
+    }
+    window.dispatchEvent(new Event("workspace-name-change"));
+  };
 
   const navigateToView = (nextView: View, formId = activeId, replace = false) => {
     setView(nextView);
@@ -263,21 +298,24 @@ export default function Home() {
     setSelectedQuestion(question.id);
     notify(`${typeLabel(type)} added`);
   };
-  const moveQuestion = (fromId: string, toId: string) => {
+  const moveQuestion = (fromId: string, toId: string, position: "before" | "after" = "before") => {
     if (!active || fromId === toId) return;
     const questions = [...active.questions];
     const from = questions.findIndex((question) => question.id === fromId);
     const to = questions.findIndex((question) => question.id === toId);
     if (from < 0 || to < 0) return;
     const [moved] = questions.splice(from, 1);
-    questions.splice(to, 0, moved);
+    const targetPosition = to + (position === "after" ? 1 : 0);
+    const insertionIndex = targetPosition - (from < targetPosition ? 1 : 0);
+    if (insertionIndex === from) return;
+    questions.splice(insertionIndex, 0, moved);
     updateForm({ questions });
   };
   const moveByKeyboard = (questionId: string, offset: -1 | 1) => {
     if (!active) return;
     const index = active.questions.findIndex((question) => question.id === questionId);
     const target = active.questions[index + offset];
-    if (target) moveQuestion(questionId, target.id);
+    if (target) moveQuestion(questionId, target.id, offset === -1 ? "before" : "after");
   };
   const togglePublish = () => {
     if (!active) return;
@@ -322,17 +360,17 @@ export default function Home() {
   if (view === "results" && active) return <><Results
     form={active} summaries={summaries} responseIndex={responseIndex}
     onBack={() => navigateToView("dashboard", active.id, true)} onEdit={() => openForm(active, "builder")}
-    onResponse={setResponseIndex} onCloseResponse={() => setResponseIndex(null)}
+    onResponse={setResponseIndex} onCloseResponse={() => setResponseIndex(null)} workspaceName={workspaceName}
   />{toast && <Toast message={toast} />}{shareFormId && displayForms.find((form) => form.id === shareFormId) && <SharePanel form={displayForms.find((form) => form.id === shareFormId)!} onClose={() => setShareFormId("")} onCopy={() => void copyShareLink(displayForms.find((form) => form.id === shareFormId)!)} />}</>;
 
   if (view === "settings") return <SettingsPage
-    theme={theme} toast={toast} onTheme={chooseTheme}
+    theme={theme} toast={toast} workspaceName={workspaceName} onTheme={chooseTheme}
     onForms={() => navigateToView("dashboard", activeId, true)}
     onSettings={() => navigateToView("settings")}
     onComingSoon={(feature) => notify(`${feature} coming soon`)}
   />;
 
-  return <><Dashboard forms={filteredForms} totalForms={displayForms.length} responseTotal={displayForms.reduce((sum, form) => sum + form.responses.length, 0)} query={query} onQuery={setQuery} onCreate={createForm} onOpen={openForm} onDuplicate={duplicateForm} onDelete={deleteForm} onShare={shareForm} onResults={(form) => openForm(form, "results")} onPreview={previewForm} onRename={renameForm} onPublish={setFormPublished} onComingSoon={(feature) => notify(`${feature} coming soon`)} onSettings={() => navigateToView("settings")} />{toast && <Toast message={toast} />}{shareFormId && displayForms.find((form) => form.id === shareFormId) && <SharePanel form={displayForms.find((form) => form.id === shareFormId)!} onClose={() => setShareFormId("")} onCopy={() => void copyShareLink(displayForms.find((form) => form.id === shareFormId)!)} />}</>;
+  return <><Dashboard forms={filteredForms} totalForms={displayForms.length} responseTotal={displayForms.reduce((sum, form) => sum + form.responses.length, 0)} query={query} onQuery={setQuery} onCreate={createForm} onOpen={openForm} onDuplicate={duplicateForm} onDelete={deleteForm} onShare={shareForm} onResults={(form) => openForm(form, "results")} onPreview={previewForm} onRename={renameForm} onPublish={setFormPublished} onComingSoon={(feature) => notify(`${feature} coming soon`)} onSettings={() => navigateToView("settings")} workspaceName={workspaceName} onRenameWorkspace={renameWorkspace} />{toast && <Toast message={toast} />}{shareFormId && displayForms.find((form) => form.id === shareFormId) && <SharePanel form={displayForms.find((form) => form.id === shareFormId)!} onClose={() => setShareFormId("")} onCopy={() => void copyShareLink(displayForms.find((form) => form.id === shareFormId)!)} />}</>;
 }
 
 function Toast({ message }: { message: string }) { return <div className="toast-message" role="status">{message}</div>; }
@@ -346,47 +384,67 @@ function SharePanel({ form, onClose, onCopy }: { form: FormData; onClose: () => 
   </section></div>;
 }
 
-function ProductNavigation({ active, onForms, onSettings, onComingSoon }: {
+function ProductNavigation({ active, onForms, onSettings, onComingSoon, workspaceName }: {
   active: "Forms" | "Settings"; onForms: () => void; onSettings: () => void; onComingSoon: (feature: string) => void;
+  workspaceName: string;
 }) {
-  return <header className="product-nav"><a className="wordmark" href="#forms" onClick={(event) => { event.preventDefault(); onForms(); }}><span className="wordmark-symbol">M</span>FormMaker</a><nav className="product-sections" aria-label="Product navigation"><button className={`product-section ${active === "Forms" ? "active" : ""}`} aria-current={active === "Forms" ? "page" : undefined} onClick={onForms}>Forms</button>{["Contacts", "Automations", "Insights", "Pages"].map((feature) => <button className="product-section" key={feature} onClick={() => onComingSoon(feature)}>{feature}</button>)}</nav><ThemeSwitcher /><button className={`settings-nav-action ${active === "Settings" ? "active" : ""}`} aria-current={active === "Settings" ? "page" : undefined} onClick={() => { if (active !== "Settings") onSettings(); }}><svg aria-hidden="true" viewBox="0 0 20 20" fill="none"><path d="M8.5 2.5h3l.45 1.75a6.2 6.2 0 0 1 1.25.72l1.7-.58 1.5 2.6-1.25 1.3c.1.48.1.98 0 1.46l1.25 1.3-1.5 2.6-1.7-.58a6.2 6.2 0 0 1-1.25.72l-.45 1.75h-3l-.45-1.75a6.2 6.2 0 0 1-1.25-.72l-1.7.58-1.5-2.6 1.25-1.3a5.7 5.7 0 0 1 0-1.46L3.6 7l1.5-2.6 1.7.58a6.2 6.2 0 0 1 1.25-.72L8.5 2.5Z" stroke="currentColor" strokeWidth="1.35" strokeLinejoin="round"/><circle cx="10" cy="9" r="2.15" stroke="currentColor" strokeWidth="1.35"/></svg><span>Settings</span></button><div className="workspace-user profile-control" role="group" aria-label="Signed in as Alex Morgan, Personal workspace"><span className="user-avatar" aria-hidden="true">A</span><span><b>Alex Morgan</b><small>Personal workspace</small></span></div></header>;
+  return <header className="product-nav"><a className="wordmark" href="#forms" onClick={(event) => { event.preventDefault(); onForms(); }}><span className="wordmark-symbol">M</span>FormMaker</a><nav className="product-sections" aria-label="Product navigation"><button className={`product-section ${active === "Forms" ? "active" : ""}`} aria-current={active === "Forms" ? "page" : undefined} onClick={onForms}>Forms</button>{["Contacts", "Automations", "Insights", "Pages"].map((feature) => <button className="product-section" key={feature} onClick={() => onComingSoon(feature)}>{feature}</button>)}</nav><ThemeSwitcher /><button className={`settings-nav-action ${active === "Settings" ? "active" : ""}`} aria-current={active === "Settings" ? "page" : undefined} onClick={() => { if (active !== "Settings") onSettings(); }}><svg aria-hidden="true" viewBox="0 0 20 20" fill="none"><path d="M8.5 2.5h3l.45 1.75a6.2 6.2 0 0 1 1.25.72l1.7-.58 1.5 2.6-1.25 1.3c.1.48.1.98 0 1.46l1.25 1.3-1.5 2.6-1.7-.58a6.2 6.2 0 0 1-1.25.72l-.45 1.75h-3l-.45-1.75a6.2 6.2 0 0 1-1.25-.72l-1.7.58-1.5-2.6 1.25-1.3a5.7 5.7 0 0 1 0-1.46L3.6 7l1.5-2.6 1.7.58a6.2 6.2 0 0 1 1.25-.72L8.5 2.5Z" stroke="currentColor" strokeWidth="1.35" strokeLinejoin="round"/><circle cx="10" cy="9" r="2.15" stroke="currentColor" strokeWidth="1.35"/></svg><span>Settings</span></button><div className="workspace-user profile-control" role="group" aria-label={`Signed in as Alex Morgan, ${workspaceName}`}><span className="user-avatar" aria-hidden="true">A</span><span><b>Alex Morgan</b><small>{workspaceName}</small></span></div></header>;
 }
 
-function SettingsPage({ theme, toast, onTheme, onForms, onSettings, onComingSoon }: {
-  theme: Theme; toast: string; onTheme: (theme: Theme) => void; onForms: () => void; onSettings: () => void; onComingSoon: (feature: string) => void;
+function SettingsPage({ theme, toast, workspaceName, onTheme, onForms, onSettings, onComingSoon }: {
+  theme: Theme; toast: string; workspaceName: string; onTheme: (theme: Theme) => void; onForms: () => void; onSettings: () => void; onComingSoon: (feature: string) => void;
 }) {
   return <><div className="workspace-shell settings-shell">
-    <ProductNavigation active="Settings" onForms={onForms} onSettings={onSettings} onComingSoon={onComingSoon} />
-    <aside className="workspace-rail"><a className="wordmark" href="#forms" onClick={(event) => { event.preventDefault(); onForms(); }}><span className="wordmark-symbol">M</span>FormMaker</a><div className="workspace-name"><span className="workspace-avatar">S</span><span><b>Studio workspace</b><small>Free plan</small></span></div><nav className="workspace-nav" aria-label="Workspaces"><span className="nav-caption">WORKSPACE</span><button className="workspace-nav-item" onClick={onForms}><span>▤</span> All forms</button><span className="workspace-nav-item selected" aria-current="page"><span>⚙</span> Settings</span></nav></aside>
+    <ProductNavigation active="Settings" onForms={onForms} onSettings={onSettings} onComingSoon={onComingSoon} workspaceName={workspaceName} />
+    <aside className="workspace-rail"><a className="wordmark" href="#forms" onClick={(event) => { event.preventDefault(); onForms(); }}><span className="wordmark-symbol">M</span>FormMaker</a><div className="workspace-name"><span className="workspace-avatar">S</span><span><b>{workspaceName}</b><small>Free plan</small></span></div><nav className="workspace-nav" aria-label="Workspaces"><span className="nav-caption">WORKSPACE</span><button className="workspace-nav-item" onClick={onForms}><span>▤</span> All forms</button><span className="workspace-nav-item selected" aria-current="page"><span>⚙</span> Settings</span></nav></aside>
     <main className="workspace-main"><header className="workspace-top settings-top"><div><span className="overline">SETTINGS</span><h1>Settings</h1><p>Make FormMaker feel like yours.</p></div></header><div className="settings-content"><section className="settings-card"><div className="settings-section-heading"><div><h2>Appearance</h2><p>Choose a color theme for your workspace.</p></div></div><div className="theme-options" role="group" aria-label="Theme"><span className="theme-label">THEME</span><div className="theme-grid">{themes.map((option) => <button key={option.id} type="button" className={`theme-option ${theme === option.id ? "selected" : ""}`} aria-pressed={theme === option.id} onClick={() => onTheme(option.id)}><span className="theme-preview" data-theme={option.id} aria-hidden="true"><span /><span /><span /></span><span className="theme-option-copy"><b>{option.name}</b><small>{option.colors}</small></span><span className="theme-selected-mark" aria-hidden="true">✓</span></button>)}</div></div></section></div></main>
   </div>{toast && <Toast message={toast} />}</>;
 }
 
-function Dashboard({ forms, totalForms, responseTotal, query, onQuery, onCreate, onOpen, onDuplicate, onDelete, onShare, onResults, onPreview, onRename, onPublish, onComingSoon, onSettings }: {
+function Dashboard({ forms, totalForms, responseTotal, query, onQuery, onCreate, onOpen, onDuplicate, onDelete, onShare, onResults, onPreview, onRename, onPublish, onComingSoon, onSettings, workspaceName, onRenameWorkspace }: {
   forms: FormData[]; totalForms: number; responseTotal: number; query: string; onQuery: (value: string) => void; onCreate: () => void;
   onOpen: (form: FormData) => void; onDuplicate: (form: FormData) => void; onDelete: (id: string) => void;
   onShare: (form: FormData) => void; onResults: (form: FormData) => void;
   onPreview: (form: FormData) => void; onRename: (id: string) => void; onPublish: (id: string) => void; onComingSoon: (feature: string) => void; onSettings: () => void;
+  workspaceName: string; onRenameWorkspace: (name: string) => void;
 }) {
   const theme = useTheme();
   const [statusFilter, setStatusFilter] = useState<"All" | "Draft" | "Published">("All");
   const [displayMode, setDisplayMode] = useState<"list" | "grid">("list");
   const [sortBy, setSortBy] = useState<"updated" | "name">("updated");
   const [openMenu, setOpenMenu] = useState("");
+  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [workspaceNameDraft, setWorkspaceNameDraft] = useState(workspaceName);
+  const workspaceMenuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") setOpenMenu(""); };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpenMenu("");
+        setWorkspaceMenuOpen(false);
+        setRenameDialogOpen(false);
+      }
+    };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+  useEffect(() => {
+    if (!workspaceMenuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !workspaceMenuRef.current?.contains(event.target)) setWorkspaceMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [workspaceMenuOpen]);
   const visibleForms = forms
     .filter((form) => statusFilter === "All" || form.status === statusFilter)
     .sort((a, b) => sortBy === "name" ? a.title.localeCompare(b.title) : new Date(b.updated).getTime() - new Date(a.updated).getTime());
   const performAction = (action: () => void) => { setOpenMenu(""); action(); };
 
   return <div className="workspace-shell">
-    <ProductNavigation active="Forms" onForms={() => window.scrollTo({ top: 0, behavior: "smooth" })} onSettings={onSettings} onComingSoon={onComingSoon} />
-    <aside className="workspace-rail"><button className="button primary create-form-button" onClick={onCreate}><span>＋</span> Create form</button><label className="search-field sidebar-search"><span>⌕</span><input aria-label="Search forms" placeholder="Search forms" value={query} onChange={(event) => onQuery(event.target.value)} /></label><nav className="workspace-nav" aria-label="Workspaces"><span className="nav-caption">WORKSPACES</span><div className="workspace-group-label">Private</div><button className="workspace-nav-item selected" aria-current="page" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><span>▦</span> My workspace <b>{totalForms}</b></button></nav><div className="workspace-quota"><span className="nav-caption">RESPONSE QUOTA</span><b>{responseTotal} responses collected</b><small>No response limit is configured.</small></div></aside>
-    <main className="workspace-main"><header className="workspace-top"><div className="workspace-heading"><div><h1>My workspace</h1><p>Forms and responses in your workspace</p></div><button className="workspace-overflow" aria-label="Workspace actions" disabled>•••</button></div><div className="workspace-header-actions"><div className="form-view-controls"><label>Sort <select aria-label="Sort forms" value={sortBy} onChange={(event) => setSortBy(event.target.value as "updated" | "name")}><option value="updated">Date updated</option><option value="name">Name A–Z</option></select></label><div className="view-toggle" role="group" aria-label="Form display"><button aria-label="List view" aria-pressed={displayMode === "list"} className={displayMode === "list" ? "active" : ""} onClick={() => setDisplayMode("list")}>☰</button><button aria-label="Grid view" aria-pressed={displayMode === "grid"} className={displayMode === "grid" ? "active" : ""} onClick={() => setDisplayMode("grid")}>▦</button></div></div></div></header>
+    <ProductNavigation active="Forms" onForms={() => window.scrollTo({ top: 0, behavior: "smooth" })} onSettings={onSettings} onComingSoon={onComingSoon} workspaceName={workspaceName} />
+    <aside className="workspace-rail"><button className="button primary create-form-button" onClick={onCreate}><span>＋</span> Create form</button><label className="search-field sidebar-search"><span>⌕</span><input aria-label="Search forms" placeholder="Search forms" value={query} onChange={(event) => onQuery(event.target.value)} /></label><nav className="workspace-nav" aria-label="Workspaces"><span className="nav-caption">WORKSPACES</span><div className="workspace-group-label">Private</div><button className="workspace-nav-item selected" aria-current="page" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><span>▦</span> {workspaceName} <b>{totalForms}</b></button></nav><div className="workspace-quota"><span className="nav-caption">RESPONSE QUOTA</span><b>{responseTotal} responses collected</b><small>No response limit is configured.</small></div></aside>
+    <main className="workspace-main"><header className="workspace-top"><div className="workspace-heading"><div><h1>{workspaceName}</h1><p>Forms and responses in your workspace</p></div><div className="workspace-menu-wrap" ref={workspaceMenuRef}><button className="workspace-overflow" aria-label="Workspace actions" aria-haspopup="menu" aria-expanded={workspaceMenuOpen} onClick={() => setWorkspaceMenuOpen((open) => !open)}>•••</button>{workspaceMenuOpen && <div className="form-actions-menu workspace-actions-menu" role="menu"><button role="menuitem" onClick={() => { setWorkspaceMenuOpen(false); setWorkspaceNameDraft(workspaceName); setRenameDialogOpen(true); }}>Rename workspace</button></div>}</div></div><div className="workspace-header-actions"><div className="form-view-controls"><label>Sort <select aria-label="Sort forms" value={sortBy} onChange={(event) => setSortBy(event.target.value as "updated" | "name")}><option value="updated">Date updated</option><option value="name">Name A–Z</option></select></label><div className="view-toggle" role="group" aria-label="Form display"><button aria-label="List view" aria-pressed={displayMode === "list"} className={displayMode === "list" ? "active" : ""} onClick={() => setDisplayMode("list")}>☰</button><button aria-label="Grid view" aria-pressed={displayMode === "grid"} className={displayMode === "grid" ? "active" : ""} onClick={() => setDisplayMode("grid")}>▦</button></div></div></div></header>
       <div className="dashboard-content">
         <div className="form-library"><div className="library-toolbar"><div><h2>Forms <span>{visibleForms.length}</span></h2></div><div className="form-filters" role="tablist" aria-label="Filter forms">{(["All", "Draft", "Published"] as const).map((filter) => <button key={filter} role="tab" aria-selected={statusFilter === filter} className={statusFilter === filter ? "active" : ""} onClick={() => setStatusFilter(filter)}>{filter === "All" ? "All forms" : filter}</button>)}</div></div>
           {displayMode === "list" && <div className="form-table-head"><span>FORM</span><span>RESPONSES</span><span>COMPLETED</span><span>UPDATED</span><span>FORM LINK</span><span /></div>}
@@ -401,13 +459,14 @@ function Dashboard({ forms, totalForms, responseTotal, query, onQuery, onCreate,
         </div>
       </div>
     </main>
+    {renameDialogOpen && <div className="modal-scrim" onClick={() => setRenameDialogOpen(false)}><section className="share-panel workspace-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="workspace-rename-title" onClick={(event) => event.stopPropagation()}><header><div><span className="overline">WORKSPACE</span><h2 id="workspace-rename-title">Rename workspace</h2></div><button className="share-close" aria-label="Close rename dialog" onClick={() => setRenameDialogOpen(false)}>×</button></header><form className="workspace-rename-form" onSubmit={(event) => { event.preventDefault(); if (!workspaceNameDraft.trim()) return; onRenameWorkspace(workspaceNameDraft); setRenameDialogOpen(false); }}><label htmlFor="workspace-name-input">WORKSPACE NAME</label><input id="workspace-name-input" autoFocus value={workspaceNameDraft} onChange={(event) => setWorkspaceNameDraft(event.target.value)} /><div className="workspace-rename-actions"><button className="button quiet" type="button" onClick={() => setRenameDialogOpen(false)}>Cancel</button><button className="button primary" type="submit" disabled={!workspaceNameDraft.trim()}>Rename</button></div></form></section></div>}
   </div>;
 }
 
 function FormThemeIcon({ theme }: { theme: Theme }) {
   return <svg className={`form-cover-icon icon-${theme}`} aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round">
     {theme === "light" && <><circle cx="12" cy="12" r="7.7" fill="currentColor" stroke="none" /><circle cx="9.1" cy="9.5" r="1.1" className="moon-crater" /><circle cx="14.8" cy="13.8" r="1.5" className="moon-crater" /><circle cx="10.4" cy="15.2" r=".65" className="moon-crater" /></>}
-    {theme === "dark" && <><circle cx="12" cy="12" r="7.7" className="new-moon-disc" /><path d="m17.8 5.4.35 1.05 1.05.35-1.05.35-.35 1.05-.35-1.05-1.05-.35 1.05-.35.35-1.05Z" fill="currentColor" stroke="none" /><circle cx="5.2" cy="7.1" r=".55" fill="currentColor" stroke="none" /></>}
+    {theme === "dark" && <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.463.402.807a6.5 6.5 0 0 0 8.268 8.268c.344-.215.829-.003.803.397Z" />}
     {theme === "spring" && <><ellipse cx="12" cy="6.5" rx="2.25" ry="3.1" className="flower-petal" /><ellipse cx="12" cy="6.5" rx="2.25" ry="3.1" className="flower-petal" transform="rotate(72 12 12)" /><ellipse cx="12" cy="6.5" rx="2.25" ry="3.1" className="flower-petal" transform="rotate(144 12 12)" /><ellipse cx="12" cy="6.5" rx="2.25" ry="3.1" className="flower-petal" transform="rotate(216 12 12)" /><ellipse cx="12" cy="6.5" rx="2.25" ry="3.1" className="flower-petal" transform="rotate(288 12 12)" /><circle cx="12" cy="12" r="1.8" className="flower-center" /></>}
     {theme === "summer" && <><circle cx="12" cy="12" r="4.1" className="sun-core" /><path d="M12 2.6v2.1m0 14.6v2.1M2.6 12h2.1m14.6 0h2.1M5.35 5.35l1.5 1.5m10.3 10.3 1.5 1.5m0-13.3-1.5 1.5m-10.3 10.3-1.5 1.5" /></>}
     {theme === "fall" && <><path d="M11.7 20.5c-.3-4.7 1.5-8.1 6.4-11.3.2 4.9-1.8 8.9-6.4 11.3Z" className="fall-leaf" /><path d="M11.8 16.9c-4.5-.5-7.2-3.1-8.1-7.8 4.5.6 7.5 3.2 8.1 7.8Z" className="fall-leaf-secondary" /><path d="M11.6 21c0-4.1 1.6-7.2 4.7-10.1M11.4 17.2 6 11.8" /></>}
@@ -420,14 +479,16 @@ function Builder({ form, question, saveState, toast, onBack, onTitle, onType, on
   onBack: () => void; onTitle: (title: string) => void; onType: (type: QuestionType) => void; onRatingMax: (ratingMax: number) => void;
   onQuestionTitle: (title: string) => void; onDescription: (value: string) => void; onRequired: (value: boolean) => void;
   onOption: (index: number, value: string) => void; onAddOption: () => void; onRemoveOption: (index: number) => void;
-  onSelectQuestion: (id: string) => void; onAddQuestion: (type: QuestionType) => void; onMove: (from: string, to: string) => void;
+  onSelectQuestion: (id: string) => void; onAddQuestion: (type: QuestionType) => void; onMove: (from: string, to: string, position?: "before" | "after") => void;
   onMoveByKeyboard: (id: string, offset: -1 | 1) => void; onDeleteQuestion: (id: string) => void; onDuplicateQuestion: (id: string) => void;
   onPreview: () => void; onPublish: () => void; onShare: () => void; onResults: () => void;
 }) {
   const [typePickerOpen, setTypePickerOpen] = useState(false);
   const [typeSearch, setTypeSearch] = useState("");
   const [draggedId, setDraggedId] = useState("");
-  const [dropId, setDropId] = useState("");
+  const [dropTarget, setDropTarget] = useState<{ id: string; position: "before" | "after" } | null>(null);
+  const draggedIdRef = useRef("");
+  const suppressQuestionClick = useRef(false);
   const [questionMenu, setQuestionMenu] = useState("");
   const titleEditor = useRef<HTMLTextAreaElement>(null);
   const questionIndex = question ? form.questions.findIndex((item) => item.id === question.id) : -1;
@@ -435,9 +496,10 @@ function Builder({ form, question, saveState, toast, onBack, onTitle, onType, on
   const isChoice = question?.type === "multiple_choice" || question?.type === "dropdown";
   const availableTypes = questionTypes.filter((item) => item.label.toLowerCase().includes(typeSearch.toLowerCase()));
   const saveLabel = saveState === "saving" ? "Saving…" : saveState === "local" ? "Saved on this device" : "All changes saved";
-  const moveDrop = (targetId: string) => {
-    if (draggedId && targetId) onMove(draggedId, targetId);
-    setDraggedId(""); setDropId("");
+  const clearDragState = () => {
+    draggedIdRef.current = "";
+    setDraggedId("");
+    setDropTarget(null);
   };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") { setTypePickerOpen(false); setQuestionMenu(""); } };
@@ -463,11 +525,27 @@ function Builder({ form, question, saveState, toast, onBack, onTitle, onType, on
         <div className="welcome-row"><span className="welcome-symbol">✳</span><span><b>Welcome screen</b><small>Introduction</small></span></div>
         <div className="question-nav-label">QUESTIONS <span>{form.questions.length}</span></div>
         <div className="question-nav" aria-label="Form questions">{form.questions.map((item, index) => <div key={item.id}
-          className={`question-nav-item ${question?.id === item.id ? "active" : ""} ${draggedId === item.id ? "dragging" : ""} ${dropId === item.id ? "drop-target" : ""}`}
-          draggable onDragStart={(event) => { setDraggedId(item.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.id); }}
-          onDragEnd={() => { setDraggedId(""); setDropId(""); }} onDragOver={(event) => { event.preventDefault(); setDropId(item.id); }}
-          onDrop={(event) => { event.preventDefault(); moveDrop(event.dataTransfer.getData("text/plain") || draggedId); }}>
-          <button className="question-nav-select" onClick={() => onSelectQuestion(item.id)}><span className="drag-grip" aria-hidden="true">⠿</span><span className="question-order">{String(index + 1).padStart(2, "0")}</span><span className="question-nav-copy"><b>{item.title || "Untitled question"}</b><small>{typeLabel(item.type)}</small></span><span className="required-mark">{item.required ? "*" : ""}</span></button>
+          className={`question-nav-item ${question?.id === item.id ? "active" : ""} ${draggedId === item.id ? "dragging" : ""} ${dropTarget?.id === item.id && dropTarget.position === "before" ? "drop-before" : ""} ${dropTarget?.id === item.id && dropTarget.position === "after" ? "drop-after" : ""}`}
+          draggable onDragStart={(event) => { draggedIdRef.current = item.id; suppressQuestionClick.current = true; setDraggedId(item.id); setDropTarget(null); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.id); }}
+          onDragEnd={() => { clearDragState(); window.setTimeout(() => { suppressQuestionClick.current = false; }, 100); }}
+          onDragOver={(event) => {
+            if (!draggedIdRef.current || draggedIdRef.current === item.id) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+            const position = event.clientY < event.currentTarget.getBoundingClientRect().top + event.currentTarget.offsetHeight / 2 ? "before" : "after";
+            setDropTarget((current) => current?.id === item.id && current.position === position ? current : { id: item.id, position });
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const sourceId = event.dataTransfer.getData("text/plain") || draggedIdRef.current;
+            if (sourceId && sourceId !== item.id) {
+              const position = event.clientY < event.currentTarget.getBoundingClientRect().top + event.currentTarget.offsetHeight / 2 ? "before" : "after";
+              onMove(sourceId, item.id, position);
+            }
+            clearDragState();
+          }}>
+          <button className="question-nav-select" onClick={(event) => { if (suppressQuestionClick.current) { event.preventDefault(); event.stopPropagation(); suppressQuestionClick.current = false; return; } onSelectQuestion(item.id); }}><span className="drag-grip" aria-hidden="true">⠿</span><span className="question-order">{String(index + 1).padStart(2, "0")}</span><span className="question-nav-copy"><b>{item.title || "Untitled question"}</b><small>{typeLabel(item.type)}</small></span><span className="required-mark">{item.required ? "*" : ""}</span></button>
           <button className="question-menu-trigger" aria-label={`Actions for question ${index + 1}`} aria-haspopup="menu" aria-expanded={questionMenu === item.id} onClick={() => setQuestionMenu(questionMenu === item.id ? "" : item.id)}>•••</button>
           {questionMenu === item.id && <div className="question-actions-menu" role="menu"><button role="menuitem" onClick={() => { onMoveByKeyboard(item.id, -1); setQuestionMenu(""); }}>Move up</button><button role="menuitem" onClick={() => { onMoveByKeyboard(item.id, 1); setQuestionMenu(""); }}>Move down</button><button role="menuitem" onClick={() => { onDuplicateQuestion(item.id); setQuestionMenu(""); }}>Duplicate</button><span /><button className="danger-action" role="menuitem" onClick={() => { onDeleteQuestion(item.id); setQuestionMenu(""); }}>Delete</button></div>}
         </div>)}</div>
@@ -606,9 +684,10 @@ function ThankYouScreen({ form, preview, onExit }: { form: FormData; preview: bo
   return <main className="respondent-shell thank-you"><div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">M</span>{form.title}</span><button className="respondent-exit" onClick={onExit}>{preview ? "Exit preview" : "Close"}</button></div><div className="thank-you-card"><span className="thank-you-mark">✳</span><span className="overline">RESPONSE COMPLETE</span><h1>Thank you for your time.</h1><p>Your answers have been submitted.</p><button className="button primary" onClick={onExit}>{preview ? "Back to editor" : "Done"}<span>→</span></button></div><footer className="respondent-footer"><span>Powered by <b>FormMaker</b></span></footer></main>;
 }
 
-function Results({ form, summaries, responseIndex, onBack, onEdit, onResponse, onCloseResponse }: {
+function Results({ form, summaries, responseIndex, onBack, onEdit, onResponse, onCloseResponse, workspaceName }: {
   form: FormData; summaries: { question: Question; answers: string[] }[]; responseIndex: number | null;
   onBack: () => void; onEdit: () => void; onResponse: (index: number) => void; onCloseResponse: () => void;
+  workspaceName: string;
 }) {
   const [tab, setTab] = useState<"summary" | "responses">("summary");
   const [responseQuery, setResponseQuery] = useState("");
@@ -624,8 +703,8 @@ function Results({ form, summaries, responseIndex, onBack, onEdit, onResponse, o
     const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" })); link.download = `${form.title}.csv`; link.click(); URL.revokeObjectURL(link.href);
   };
   const responseRows = form.responses.map((response, index) => ({ response, index })).filter(({ response, index }) => `response ${index + 1} ${Object.values(response).join(" ")}`.toLowerCase().includes(responseQuery.toLowerCase())).reverse();
-  return <div className="workspace-shell results-shell"><header className="workspace-top results-toolbar"><button className="results-action secondary" onClick={onBack}>← Back to Forms</button><span className="header-spacer" /><ThemeSwitcher /><button className="results-action primary" onClick={onEdit}>Edit form <span aria-hidden="true">→</span></button></header>
-    <aside className="workspace-rail"><a className="wordmark" href="#home"><span className="wordmark-symbol">M</span>FormMaker</a><div className="workspace-name"><span className="workspace-avatar">S</span><span><b>Studio workspace</b><small>Free plan</small></span></div><nav className="workspace-nav"><span className="nav-caption">WORKSPACE</span><button className="workspace-nav-item selected" onClick={onBack}><span>▤</span> All forms</button></nav></aside>
+  return <div className="workspace-shell results-shell"><header className="results-topbar"><a className="wordmark" href="#home"><span className="wordmark-symbol">M</span>FormMaker</a><button className="results-action secondary" onClick={onBack}>← Back to Home</button><ThemeSwitcher /><button className="results-action primary" onClick={onEdit}>Edit form <span aria-hidden="true">→</span></button></header>
+    <aside className="workspace-rail"><div className="workspace-name"><span className="workspace-avatar">S</span><span><b>{workspaceName}</b><small>Free plan</small></span></div><nav className="workspace-nav"><span className="nav-caption">WORKSPACE</span><button className="workspace-nav-item selected" onClick={onBack}><span>▤</span> All forms</button></nav></aside>
     <main className="workspace-main"><div className="results-content">
       <div className="results-heading"><div><span className="overline">RESULTS</span><h1>{form.title}</h1><p>Review your form’s performance and responses.</p></div><button className="results-action secondary" onClick={exportCsv}>↓ Export CSV</button></div>
       <div className="results-overview"><div><span>RESPONSES</span><b>{form.responses.length}</b></div><div><span>QUESTIONS</span><b>{form.questions.length}</b></div><div><span>STATUS</span><b className={`form-status ${form.status.toLowerCase()}`}><i />{form.status}</b></div></div>
