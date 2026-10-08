@@ -1,6 +1,5 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  distDir: ".next-build",
   cacheComponents: true,
   partialPrefetching: true,
   turbopack: {
