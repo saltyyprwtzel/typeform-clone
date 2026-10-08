@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type QuestionType = "short_text" | "long_text" | "multiple_choice" | "dropdown" | "email" | "number" | "yes_no" | "rating";
 type Question = { id: string; type: QuestionType; title: string; required: boolean; description: string; options: string[] };
@@ -19,6 +19,11 @@ const questionTypes: { type: QuestionType; label: string; icon: string; placehol
   { type: "rating", label: "Rating", icon: "☆", placeholder: "Rate from 1 to 10" },
 ];
 const typeLabel = (type: QuestionType) => questionTypes.find((item) => item.type === type)?.label ?? "Question";
+const typeDescription: Record<QuestionType, string> = {
+  short_text: "A short written answer", long_text: "A longer written answer", multiple_choice: "Choose one from a list",
+  dropdown: "Choose from a dropdown list", email: "Collect an email address", number: "Enter a number",
+  yes_no: "Answer yes or no", rating: "Rate from 1 to 10",
+};
 const makeQuestion = (type: QuestionType, order: number): Question => ({
   id: crypto.randomUUID(), type, title: `Question ${order}`, required: true, description: "",
   options: type === "multiple_choice" || type === "dropdown" ? ["Option 1", "Option 2", "Option 3"] : [],
@@ -58,6 +63,41 @@ export default function Home() {
   const [apiReady, setApiReady] = useState(false);
   const [preview, setPreview] = useState(false);
   const [responseIndex, setResponseIndex] = useState<number | null>(null);
+  const [shareFormId, setShareFormId] = useState("");
+
+  const navigateToView = (nextView: View, formId = activeId, replace = false) => {
+    setView(nextView);
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (nextView === "dashboard") {
+      url.searchParams.delete("view");
+      url.searchParams.delete("formId");
+    } else {
+      url.searchParams.set("view", nextView);
+      if (formId) url.searchParams.set("formId", formId);
+      else url.searchParams.delete("formId");
+    }
+    const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+    if (replace) window.history.replaceState(null, "", nextUrl);
+    else window.history.pushState(null, "", nextUrl);
+  };
+
+  useEffect(() => {
+    const syncViewFromUrl = () => {
+      const params = new URLSearchParams(window.location.search);
+      const requestedView = params.get("view");
+      const formId = params.get("formId") ?? "";
+      if ((requestedView === "builder" || requestedView === "results") && formId) {
+        setActiveId(formId);
+        setView(requestedView);
+      } else {
+        setView("dashboard");
+      }
+    };
+    syncViewFromUrl();
+    window.addEventListener("popstate", syncViewFromUrl);
+    return () => window.removeEventListener("popstate", syncViewFromUrl);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -115,18 +155,51 @@ export default function Home() {
     setForms((items) => [form, ...items]);
     setActiveId(form.id);
     setSelectedQuestion(form.questions[0].id);
-    setView("builder");
+    navigateToView("builder", form.id);
   };
   const openForm = (form: FormData, destination: View = "builder") => {
     setActiveId(form.id);
     setSelectedQuestion(form.questions[0]?.id ?? "");
-    setView(destination);
+    navigateToView(destination, form.id);
     setPreview(false);
   };
   const duplicateForm = (form: FormData) => {
     const duplicate = { ...form, id: crypto.randomUUID(), title: `${form.title} copy`, status: "Draft" as const, updated: new Date().toISOString(), responses: [], responseDates: [] };
     setForms((items) => [duplicate, ...items]);
     notify("Form duplicated");
+  };
+  const renameForm = (formId: string) => {
+    const form = forms.find((item) => item.id === formId);
+    if (!form) return;
+    const title = window.prompt("Rename form", form.title)?.trim();
+    if (!title || title === form.title) return;
+    setForms((items) => items.map((item) => item.id === formId ? { ...item, title, updated: new Date().toISOString() } : item));
+    notify("Form renamed");
+  };
+  const setFormPublished = (formId: string) => {
+    const form = forms.find((item) => item.id === formId);
+    if (!form) return;
+    const nextStatus = form.status === "Published" ? "Draft" : "Published";
+    setForms((items) => items.map((item) => item.id === formId ? { ...item, status: nextStatus, updated: new Date().toISOString() } : item));
+    notify(nextStatus === "Published" ? "Form published" : "Form unpublished");
+  };
+  const previewForm = (form: FormData) => {
+    if (!form.questions.length) { notify("Add a question before previewing this form"); return; }
+    setActiveId(form.id);
+    setSelectedQuestion(form.questions[0].id);
+    setPreview(true);
+  };
+  const duplicateQuestion = (questionId: string) => {
+    if (!active) return;
+    const index = active.questions.findIndex((question) => question.id === questionId);
+    if (index < 0) return;
+    const original = active.questions[index];
+    const duplicate = { ...original, id: crypto.randomUUID(), title: `${original.title} copy`, options: [...original.options] };
+    const questions = [...active.questions];
+    questions.splice(index + 1, 0, duplicate);
+    updateForm({ questions });
+    setSelectedQuestion(duplicate.id);
+    notify("Question duplicated");
   };
   const deleteForm = (formId: string) => {
     setForms((items) => items.filter((form) => form.id !== formId));
@@ -155,19 +228,18 @@ export default function Home() {
     const target = active.questions[index + offset];
     if (target) moveQuestion(questionId, target.id);
   };
-  const togglePublish = async () => {
+  const togglePublish = () => {
     if (!active) return;
     if (active.status === "Draft" && !active.questions.length) { notify("Add a question before publishing"); return; }
     const publishing = active.status === "Draft";
     updateForm({ status: publishing ? "Published" : "Draft" });
-    if (!publishing) { notify("Form unpublished"); return; }
-    const url = `${window.location.origin}/f/${active.id}`;
-    try { await navigator.clipboard.writeText(url); notify("Published — share link copied"); }
-    catch { notify("Published — copy the link from the form list"); }
+    if (publishing) { setShareFormId(active.id); notify("Form published"); }
+    else { setShareFormId(""); notify("Form unpublished"); }
   };
-  const shareForm = async (form: FormData) => {
+  const shareForm = (form: FormData) => setShareFormId(form.id);
+  const copyShareLink = async (form: FormData) => {
     const url = `${window.location.origin}/f/${form.id}`;
-    try { await navigator.clipboard.writeText(url); notify("Share link copied"); }
+    try { await navigator.clipboard.writeText(url); notify("Link copied"); }
     catch { notify(url); }
   };
   const removeQuestion = (questionId: string) => {
@@ -191,7 +263,7 @@ export default function Home() {
   if (preview && active) return <PreviewFlow form={active} onExit={() => setPreview(false)} onComplete={savePreviewResponse} />;
   if (view === "builder" && active) return <><Builder
     form={active} question={currentQuestion} saveState={saveState} toast={toast}
-    onBack={() => setView("dashboard")} onTitle={(title) => updateForm({ title })}
+    onBack={() => navigateToView("dashboard", active.id, true)} onTitle={(title) => updateForm({ title })}
     onType={(type) => currentQuestion && updateQuestion(currentQuestion.id, { type, options: type === "multiple_choice" || type === "dropdown" ? ["Option 1", "Option 2", "Option 3"] : [] })}
     onQuestionTitle={(title) => currentQuestion && updateQuestion(currentQuestion.id, { title })}
     onDescription={(description) => currentQuestion && updateQuestion(currentQuestion.id, { description })}
@@ -200,80 +272,114 @@ export default function Home() {
     onAddOption={() => currentQuestion && updateQuestion(currentQuestion.id, { options: [...currentQuestion.options, `Option ${currentQuestion.options.length + 1}`] })}
     onRemoveOption={(index) => currentQuestion && updateQuestion(currentQuestion.id, { options: currentQuestion.options.filter((_, i) => i !== index) })}
     onSelectQuestion={setSelectedQuestion} onAddQuestion={addQuestion} onMove={moveQuestion} onMoveByKeyboard={moveByKeyboard}
-    onDeleteQuestion={removeQuestion} onPreview={startPreview} onPublish={togglePublish} onShare={() => void shareForm(active)} onResults={() => setView("results")}
-    notify={notify}
-  />{toast && <Toast message={toast} />}</>;
+    onDeleteQuestion={removeQuestion} onDuplicateQuestion={duplicateQuestion} onPreview={startPreview} onPublish={togglePublish} onShare={() => shareForm(active)} onResults={() => navigateToView("results", active.id)}
+  />{toast && <Toast message={toast} />}{shareFormId && forms.find((form) => form.id === shareFormId) && <SharePanel form={forms.find((form) => form.id === shareFormId)!} onClose={() => setShareFormId("")} onCopy={() => void copyShareLink(forms.find((form) => form.id === shareFormId)!)} />}</>;
   if (view === "results" && active) return <><Results
     form={active} summaries={summaries} responseIndex={responseIndex}
-    onBack={() => setView("dashboard")} onEdit={() => openForm(active, "builder")}
+    onBack={() => navigateToView("dashboard", active.id, true)} onEdit={() => openForm(active, "builder")}
     onResponse={setResponseIndex} onCloseResponse={() => setResponseIndex(null)}
-  />{toast && <Toast message={toast} />}</>;
+  />{toast && <Toast message={toast} />}{shareFormId && forms.find((form) => form.id === shareFormId) && <SharePanel form={forms.find((form) => form.id === shareFormId)!} onClose={() => setShareFormId("")} onCopy={() => void copyShareLink(forms.find((form) => form.id === shareFormId)!)} />}</>;
 
-  return <><Dashboard forms={filteredForms} query={query} onQuery={setQuery} onCreate={createForm} onOpen={openForm} onDuplicate={duplicateForm} onDelete={deleteForm} onShare={(form) => void shareForm(form)} onResults={(form) => openForm(form, "results")} />{toast && <Toast message={toast} />}</>;
+  return <><Dashboard forms={filteredForms} totalForms={forms.length} responseTotal={forms.reduce((sum, form) => sum + form.responses.length, 0)} query={query} onQuery={setQuery} onCreate={createForm} onOpen={openForm} onDuplicate={duplicateForm} onDelete={deleteForm} onShare={shareForm} onResults={(form) => openForm(form, "results")} onPreview={previewForm} onRename={renameForm} onPublish={setFormPublished} />{toast && <Toast message={toast} />}{shareFormId && forms.find((form) => form.id === shareFormId) && <SharePanel form={forms.find((form) => form.id === shareFormId)!} onClose={() => setShareFormId("")} onCopy={() => void copyShareLink(forms.find((form) => form.id === shareFormId)!)} />}</>;
 }
 
 function Toast({ message }: { message: string }) { return <div className="toast-message" role="status">{message}</div>; }
 
-function Dashboard({ forms, query, onQuery, onCreate, onOpen, onDuplicate, onDelete, onShare, onResults }: {
-  forms: FormData[]; query: string; onQuery: (value: string) => void; onCreate: () => void;
+function SharePanel({ form, onClose, onCopy }: { form: FormData; onClose: () => void; onCopy: () => void }) {
+  const url = typeof window === "undefined" ? `/f/${form.id}` : `${window.location.origin}/f/${form.id}`;
+  return <div className="modal-scrim share-scrim" onClick={onClose}><section className="share-panel" role="dialog" aria-modal="true" aria-labelledby="share-title" onClick={(event) => event.stopPropagation()}>
+    <header><div><span className="overline">YOUR FORM IS LIVE</span><h2 id="share-title">Share your form</h2></div><button className="share-close" aria-label="Close share panel" onClick={onClose}>×</button></header>
+    <p>Anyone with this link can respond to <b>{form.title}</b>.</p><label htmlFor="share-link">FORM LINK</label><div className="share-link-row"><input id="share-link" readOnly value={url} onFocus={(event) => event.currentTarget.select()} /><button className="button primary" onClick={onCopy}>Copy link</button></div>
+    <div className="share-panel-footer"><a href={url} target="_blank" rel="noreferrer">Open live form ↗</a><button className="button quiet" onClick={onClose}>Done</button></div>
+  </section></div>;
+}
+
+function Dashboard({ forms, totalForms, responseTotal, query, onQuery, onCreate, onOpen, onDuplicate, onDelete, onShare, onResults, onPreview, onRename, onPublish }: {
+  forms: FormData[]; totalForms: number; responseTotal: number; query: string; onQuery: (value: string) => void; onCreate: () => void;
   onOpen: (form: FormData) => void; onDuplicate: (form: FormData) => void; onDelete: (id: string) => void;
   onShare: (form: FormData) => void; onResults: (form: FormData) => void;
+  onPreview: (form: FormData) => void; onRename: (id: string) => void; onPublish: (id: string) => void;
 }) {
+  const [statusFilter, setStatusFilter] = useState<"All" | "Draft" | "Published">("All");
+  const [displayMode, setDisplayMode] = useState<"list" | "grid">("list");
+  const [sortBy, setSortBy] = useState<"updated" | "name">("updated");
+  const [openMenu, setOpenMenu] = useState("");
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") setOpenMenu(""); };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+  const visibleForms = forms
+    .filter((form) => statusFilter === "All" || form.status === statusFilter)
+    .sort((a, b) => sortBy === "name" ? a.title.localeCompare(b.title) : new Date(b.updated).getTime() - new Date(a.updated).getTime());
+  const performAction = (action: () => void) => { setOpenMenu(""); action(); };
+
   return <div className="workspace-shell">
-    <aside className="workspace-rail"><a className="wordmark" href="#home"><span className="wordmark-symbol">f</span>formcraft</a><div className="workspace-name"><span className="workspace-avatar">S</span><span><b>Studio workspace</b><small>Free plan</small></span><span className="workspace-caret">⌄</span></div><nav className="workspace-nav"><span className="nav-caption">WORKSPACE</span><a className="workspace-nav-item selected" href="#forms"><span>▤</span> All forms <b>{forms.length}</b></a></nav><div className="workspace-user"><span className="user-avatar">A</span><span><b>Alex Morgan</b><small>Personal workspace</small></span><span className="workspace-caret">•••</span></div></aside>
-    <main className="workspace-main"><header className="workspace-top"><span>Studio workspace <i>/</i> Forms</span><button className="avatar-button" aria-label="Account">A</button></header>
-      <div className="dashboard-content"><div className="dashboard-heading"><div><span className="overline">YOUR WORKSPACE</span><h1>Forms</h1><p>Build something worth answering.</p></div><button className="button primary" onClick={onCreate}><span>＋</span> Create a form</button></div>
-        <div className="form-library"><div className="library-toolbar"><div><h2>All forms <span>{forms.length}</span></h2><p>Your forms, all in one place.</p></div><label className="search-field"><span>⌕</span><input aria-label="Search forms" placeholder="Search forms" value={query} onChange={(event) => onQuery(event.target.value)} /></label></div>
-          <div className="form-table-head"><span>NAME</span><span>STATUS</span><span>RESPONSES</span><span>LAST EDITED</span><span /></div>
-          {forms.length ? forms.map((form, index) => <article className="form-entry" key={form.id}>
-            <button className={`form-cover cover-${index % 4}`} onClick={() => onOpen(form)} aria-label={`Edit ${form.title}`}><span>{index % 2 ? "✳" : "✦"}</span></button>
-            <button className="form-name" onClick={() => onOpen(form)}><b>{form.title}</b><small>Open editor</small></button>
-            <span className={`form-status ${form.status.toLowerCase()}`}><i />{form.status}</span>
-            <button className="response-link" onClick={() => onResults(form)}>{form.responses.length}<small> responses</small></button>
-            <span className="form-edited">{new Date(form.updated).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}</span>
-            <div className="entry-actions"><button aria-label="Edit form" title="Edit" onClick={() => onOpen(form)}>↗</button><button aria-label="View results" title="Results" onClick={() => onResults(form)}>▥</button>{form.status === "Published" && <button aria-label="Copy share link" title="Share" onClick={() => onShare(form)}>⌁</button>}<button aria-label="Duplicate form" title="Duplicate" onClick={() => onDuplicate(form)}>⧉</button><button aria-label="Delete form" title="Delete" onClick={() => onDelete(form.id)}>×</button></div>
-          </article>) : <div className="empty-library">{query ? "No forms match that search." : <>Your workspace is ready. <button onClick={onCreate}>Create your first form</button></>}</div>}
+    <header className="product-nav"><a className="wordmark" href="#forms"><span className="wordmark-symbol">f</span>formcraft</a><nav className="product-sections" aria-label="Product navigation"><button className="product-section active" aria-current="page">Forms</button><button className="product-section" disabled title="Not included in this assessment">Contacts</button><button className="product-section" disabled title="Not included in this assessment">Automations</button><button className="product-section" disabled title="Not included in this assessment">Insights</button><button className="product-section" disabled title="Not included in this assessment">Pages</button></nav><button className="avatar-button" aria-label="Account">A</button></header>
+    <aside className="workspace-rail"><button className="button primary create-form-button" onClick={onCreate}><span>＋</span> Create form</button><label className="search-field sidebar-search"><span>⌕</span><input aria-label="Search forms" placeholder="Search forms" value={query} onChange={(event) => onQuery(event.target.value)} /></label><nav className="workspace-nav" aria-label="Workspaces"><span className="nav-caption">WORKSPACES</span><div className="workspace-group-label">Private</div><button className="workspace-nav-item selected" aria-current="page"><span>▦</span> My workspace <b>{totalForms}</b></button></nav><div className="workspace-quota"><span className="nav-caption">RESPONSE QUOTA</span><b>{responseTotal} responses collected</b><small>No response limit is configured.</small></div><div className="workspace-user"><span className="user-avatar">A</span><span><b>Alex Morgan</b><small>Personal workspace</small></span><span className="workspace-caret">•••</span></div></aside>
+    <main className="workspace-main"><header className="workspace-top"><div className="workspace-heading"><div><h1>My workspace</h1><p>Forms and responses in your workspace</p></div><button className="workspace-overflow" aria-label="Workspace actions" disabled>•••</button></div><div className="workspace-header-actions"><button className="invite-placeholder" disabled title="Team management is not included in this assessment">Invite</button><div className="form-view-controls"><label>Sort <select aria-label="Sort forms" value={sortBy} onChange={(event) => setSortBy(event.target.value as "updated" | "name")}><option value="updated">Date updated</option><option value="name">Name A–Z</option></select></label><div className="view-toggle" role="group" aria-label="Form display"><button aria-label="List view" aria-pressed={displayMode === "list"} className={displayMode === "list" ? "active" : ""} onClick={() => setDisplayMode("list")}>☰</button><button aria-label="Grid view" aria-pressed={displayMode === "grid"} className={displayMode === "grid" ? "active" : ""} onClick={() => setDisplayMode("grid")}>▦</button></div></div></div></header>
+      <div className="dashboard-content">
+        <div className="form-library"><div className="library-toolbar"><div><h2>Forms <span>{visibleForms.length}</span></h2></div><div className="form-filters" role="tablist" aria-label="Filter forms">{(["All", "Draft", "Published"] as const).map((filter) => <button key={filter} role="tab" aria-selected={statusFilter === filter} className={statusFilter === filter ? "active" : ""} onClick={() => setStatusFilter(filter)}>{filter === "All" ? "All forms" : filter}</button>)}</div></div>
+          {displayMode === "list" && <div className="form-table-head"><span>FORM</span><span>RESPONSES</span><span>COMPLETED</span><span>UPDATED</span><span>FORM LINK</span><span /></div>}
+          <div className={`form-collection ${displayMode}`}>
+            {visibleForms.map((form, index) => <article className="form-row" key={form.id}>
+              <div className="form-identity"><button className={`form-cover cover-${index % 4}`} onClick={() => onOpen(form)} aria-label={`Edit ${form.title}`}><span>{index % 2 ? "✳" : "✦"}</span></button><button className="form-name" onClick={() => onOpen(form)}><b>{form.title}</b><small><span className={`inline-form-status ${form.status.toLowerCase()}`}>{form.status}</span> · Updated {new Date(form.updated).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}</small></button></div>
+              <button className="response-link" onClick={() => onResults(form)}>{form.responses.length}</button><span className="form-completed" title="Only completed submissions are stored; partial responses are not tracked.">{form.responses.length}</span><span className="form-edited">{new Date(form.updated).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}</span><span className="form-integrations" title={form.status === "Published" ? "Published form link available" : "No live form link"} aria-label={form.status === "Published" ? "Published form link available" : "No live form link"}>{form.status === "Published" ? "↗" : "—"}</span>
+              <div className="form-menu-wrap"><button className="form-menu-trigger" aria-label={`Actions for ${form.title}`} aria-haspopup="menu" aria-expanded={openMenu === form.id} onClick={() => setOpenMenu(openMenu === form.id ? "" : form.id)}>•••</button>{openMenu === form.id && <div className="form-actions-menu" role="menu"><button role="menuitem" onClick={() => performAction(() => onOpen(form))}>Edit</button><button role="menuitem" onClick={() => performAction(() => onPreview(form))}>Preview</button><button role="menuitem" onClick={() => performAction(() => onResults(form))}>Results</button>{form.status === "Published" && <button role="menuitem" onClick={() => performAction(() => onShare(form))}>Share / copy link</button>}<button role="menuitem" onClick={() => performAction(() => onRename(form.id))}>Rename</button><button role="menuitem" onClick={() => performAction(() => onPublish(form.id))}>{form.status === "Published" ? "Unpublish" : "Publish"}</button><button role="menuitem" onClick={() => performAction(() => onDuplicate(form))}>Duplicate</button><span /><button className="danger-action" role="menuitem" onClick={() => performAction(() => onDelete(form.id))}>Delete</button></div>}</div>
+            </article>)}
+          </div>
+          {!visibleForms.length && <div className="empty-library">{query || statusFilter !== "All" ? "No forms match these filters." : <>Your workspace is ready. <button onClick={onCreate}>Create your first form</button></>}</div>}
         </div>
       </div>
     </main>
   </div>;
 }
 
-function Builder({ form, question, saveState, toast, onBack, onTitle, onType, onQuestionTitle, onDescription, onRequired, onOption, onAddOption, onRemoveOption, onSelectQuestion, onAddQuestion, onMove, onMoveByKeyboard, onDeleteQuestion, onPreview, onPublish, onShare, onResults, notify }: {
+function Builder({ form, question, saveState, toast, onBack, onTitle, onType, onQuestionTitle, onDescription, onRequired, onOption, onAddOption, onRemoveOption, onSelectQuestion, onAddQuestion, onMove, onMoveByKeyboard, onDeleteQuestion, onDuplicateQuestion, onPreview, onPublish, onShare, onResults }: {
   form: FormData; question?: Question; saveState: "saved" | "saving" | "local"; toast: string;
   onBack: () => void; onTitle: (title: string) => void; onType: (type: QuestionType) => void;
   onQuestionTitle: (title: string) => void; onDescription: (value: string) => void; onRequired: (value: boolean) => void;
   onOption: (index: number, value: string) => void; onAddOption: () => void; onRemoveOption: (index: number) => void;
   onSelectQuestion: (id: string) => void; onAddQuestion: (type: QuestionType) => void; onMove: (from: string, to: string) => void;
-  onMoveByKeyboard: (id: string, offset: -1 | 1) => void; onDeleteQuestion: (id: string) => void;
-  onPreview: () => void; onPublish: () => void; onShare: () => void; onResults: () => void; notify: (message: string) => void;
+  onMoveByKeyboard: (id: string, offset: -1 | 1) => void; onDeleteQuestion: (id: string) => void; onDuplicateQuestion: (id: string) => void;
+  onPreview: () => void; onPublish: () => void; onShare: () => void; onResults: () => void;
 }) {
   const [typePickerOpen, setTypePickerOpen] = useState(false);
+  const [typeSearch, setTypeSearch] = useState("");
   const [draggedId, setDraggedId] = useState("");
   const [dropId, setDropId] = useState("");
+  const [questionMenu, setQuestionMenu] = useState("");
   const questionIndex = question ? form.questions.findIndex((item) => item.id === question.id) : -1;
   const isChoice = question?.type === "multiple_choice" || question?.type === "dropdown";
+  const availableTypes = questionTypes.filter((item) => item.label.toLowerCase().includes(typeSearch.toLowerCase()));
   const saveLabel = saveState === "saving" ? "Saving…" : saveState === "local" ? "Saved on this device" : "All changes saved";
   const moveDrop = (targetId: string) => {
     if (draggedId && targetId) onMove(draggedId, targetId);
     setDraggedId(""); setDropId("");
   };
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") { setTypePickerOpen(false); setQuestionMenu(""); } };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   return <main className="builder-app">
-    <header className="builder-header"><button className="back-button" onClick={onBack} aria-label="Back to forms">←</button><span className="brand-mini">f</span><span className="header-divider" /><input className="form-title-input" aria-label="Form title" value={form.title} onChange={(event) => onTitle(event.target.value)} /><span className={`save-label ${saveState}`}><i />{saveLabel}</span><div className="header-spacer" /><button className="button quiet" onClick={onResults}>Results <span className="button-count">{form.responses.length}</span></button><button className="button quiet" onClick={onPreview}>▷ Preview</button>{form.status === "Published" && <button className="button quiet share-action" onClick={onShare}>⌁ Share</button>}<button className="button primary" onClick={onPublish}>{form.status === "Published" ? "Unpublish" : "Publish"}<span>↗</span></button></header>
+    <header className="builder-header"><button className="back-button" onClick={onBack} aria-label="Back to forms">←</button><span className="brand-mini">f</span><span className="header-divider" /><input className="form-title-input" aria-label="Form title" value={form.title} onChange={(event) => onTitle(event.target.value)} /><span className={`save-label ${saveState}`}><i />{saveLabel}</span><div className="header-spacer" /><button className="button quiet" onClick={onResults}>Results <span className="button-count">{form.responses.length}</span></button><button className="button quiet" onClick={onPreview}>▷ Preview</button>{form.status === "Published" ? <><button className="button quiet share-action" onClick={onShare}>Share ↗</button><button className="button quiet unpublish-action" onClick={onPublish}>Unpublish</button></> : <button className="button primary" onClick={onPublish}>Publish <span>↗</span></button>}</header>
     <div className="editor-layout">
-      <aside className="content-panel"><div className="panel-title"><span>CONTENT</span><button aria-label="Content options" onClick={() => notify("Content options are coming soon")}>•••</button></div>
-        <button className="welcome-row" onClick={() => notify("Welcome screen settings are coming soon")}><span className="welcome-symbol">✳</span><span><b>Welcome screen</b><small>Introduction</small></span><span className="row-arrow">›</span></button>
+      <aside className="content-panel"><div className="panel-title"><span>CONTENT</span><span className="content-panel-caption">Questions</span></div>
+        <div className="welcome-row"><span className="welcome-symbol">✳</span><span><b>Welcome screen</b><small>Introduction</small></span></div>
         <div className="question-nav-label">QUESTIONS <span>{form.questions.length}</span></div>
-        <div className="question-nav" aria-label="Form questions">{form.questions.map((item, index) => <button key={item.id}
+        <div className="question-nav" aria-label="Form questions">{form.questions.map((item, index) => <div key={item.id}
           className={`question-nav-item ${question?.id === item.id ? "active" : ""} ${draggedId === item.id ? "dragging" : ""} ${dropId === item.id ? "drop-target" : ""}`}
           draggable onDragStart={(event) => { setDraggedId(item.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.id); }}
           onDragEnd={() => { setDraggedId(""); setDropId(""); }} onDragOver={(event) => { event.preventDefault(); setDropId(item.id); }}
-          onDrop={(event) => { event.preventDefault(); moveDrop(event.dataTransfer.getData("text/plain") || draggedId); }} onClick={() => onSelectQuestion(item.id)}>
-          <span className="drag-grip" aria-hidden="true">⠿</span><span className="question-order">{String(index + 1).padStart(2, "0")}</span><span className="question-nav-copy"><b>{item.title || "Untitled question"}</b><small>{typeLabel(item.type)}</small></span><span className="required-mark">{item.required ? "*" : ""}</span><span className="reorder-actions"><span role="button" tabIndex={0} aria-label={`Move question ${index + 1} up`} onClick={(event) => { event.stopPropagation(); onMoveByKeyboard(item.id, -1); }} onKeyDown={(event) => { if (event.key === "Enter") { event.stopPropagation(); onMoveByKeyboard(item.id, -1); } }}>↑</span><span role="button" tabIndex={0} aria-label={`Move question ${index + 1} down`} onClick={(event) => { event.stopPropagation(); onMoveByKeyboard(item.id, 1); }} onKeyDown={(event) => { if (event.key === "Enter") { event.stopPropagation(); onMoveByKeyboard(item.id, 1); } }}>↓</span></span>
-        </button>)}</div>
+          onDrop={(event) => { event.preventDefault(); moveDrop(event.dataTransfer.getData("text/plain") || draggedId); }}>
+          <button className="question-nav-select" onClick={() => onSelectQuestion(item.id)}><span className="drag-grip" aria-hidden="true">⠿</span><span className="question-order">{String(index + 1).padStart(2, "0")}</span><span className="question-nav-copy"><b>{item.title || "Untitled question"}</b><small>{typeLabel(item.type)}</small></span><span className="required-mark">{item.required ? "*" : ""}</span></button>
+          <button className="question-menu-trigger" aria-label={`Actions for question ${index + 1}`} aria-haspopup="menu" aria-expanded={questionMenu === item.id} onClick={() => setQuestionMenu(questionMenu === item.id ? "" : item.id)}>•••</button>
+          {questionMenu === item.id && <div className="question-actions-menu" role="menu"><button role="menuitem" onClick={() => { onMoveByKeyboard(item.id, -1); setQuestionMenu(""); }}>Move up</button><button role="menuitem" onClick={() => { onMoveByKeyboard(item.id, 1); setQuestionMenu(""); }}>Move down</button><button role="menuitem" onClick={() => { onDuplicateQuestion(item.id); setQuestionMenu(""); }}>Duplicate</button><span /><button className="danger-action" role="menuitem" onClick={() => { onDeleteQuestion(item.id); setQuestionMenu(""); }}>Delete</button></div>}
+        </div>)}</div>
         <button className={`add-content-button ${typePickerOpen ? "open" : ""}`} onClick={() => setTypePickerOpen((open) => !open)}><span>＋</span><span>Add content</span><span className="add-chevron">{typePickerOpen ? "−" : "⌄"}</span></button>
-        {typePickerOpen && <div className="type-picker"><p>Choose a question type</p><div>{questionTypes.map((item) => <button key={item.type} onClick={() => { onAddQuestion(item.type); setTypePickerOpen(false); }}><span>{item.icon}</span>{item.label}</button>)}</div></div>}
+        {typePickerOpen && <div className="type-picker" role="dialog" aria-label="Add a question"><div className="type-picker-heading"><div><b>Add content</b><p>Choose a question type</p></div><button aria-label="Close question types" onClick={() => setTypePickerOpen(false)}>×</button></div><label className="type-search"><span>⌕</span><input aria-label="Search question types" placeholder="Search question types" value={typeSearch} onChange={(event) => setTypeSearch(event.target.value)} /></label><div className="type-picker-list">{availableTypes.map((item) => <button key={item.type} onClick={() => { onAddQuestion(item.type); setTypePickerOpen(false); setTypeSearch(""); }}><span className="type-picker-icon">{item.icon}</span><span><b>{item.label}</b><small>{typeDescription[item.type]}</small></span></button>)}</div>{!availableTypes.length && <p className="type-empty">No matching question types.</p>}</div>}
       </aside>
 
       <section className="editor-stage"><div className="stage-meta"><span>FORM EDITOR</span><span>{String(Math.max(questionIndex + 1, 0)).padStart(2, "0")} / {String(form.questions.length).padStart(2, "0")}</span></div>
@@ -289,15 +395,16 @@ function Builder({ form, question, saveState, toast, onBack, onTitle, onType, on
               {question.type === "rating" && <div className="preview-rating">{[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((number) => <button key={number}>{number}</button>)}</div>}
               {!isChoice && question.type !== "yes_no" && question.type !== "rating" && <div className={`preview-input ${question.type === "long_text" ? "multiline" : ""}`}><span>{questionTypes.find((item) => item.type === question.type)?.placeholder}</span>{question.type === "email" && <b>@</b>}</div>}
             </div>
-            <div className="editor-card-footer"><span>{question.required ? "* Required" : "Optional"}</span><div><button onClick={() => onMoveByKeyboard(question.id, -1)} aria-label="Move question up">↑</button><button onClick={() => onMoveByKeyboard(question.id, 1)} aria-label="Move question down">↓</button><button className="delete-question" onClick={() => onDeleteQuestion(question.id)} aria-label="Delete question">⌫</button></div></div>
+            <div className="editor-card-footer"><span>{question.required ? "* Required" : "Optional"}</span><span className="editor-question-type">{typeLabel(question.type)}</span></div>
           </> : <div className="empty-question"><span>✳</span><h2>Start with a welcome</h2><p>Set the scene for your questions, then add your first question.</p><button className="button primary" onClick={() => setTypePickerOpen(true)}>＋ Add your first question</button></div>}
         </div><div className="stage-caption">Press <kbd>Enter ↵</kbd> to continue in preview</div>
       </section>
 
-      <aside className="question-settings"><div className="settings-heading"><span>QUESTION</span><button aria-label="Question settings" onClick={() => notify("More question settings are coming soon")}>•••</button></div>{question ? <>
-        <label className="setting-label" htmlFor="question-type">QUESTION TYPE</label><select id="question-type" className="type-select" value={question.type} onChange={(event) => onType(event.target.value as QuestionType)}>{questionTypes.map((item) => <option value={item.type} key={item.type}>{item.label}</option>)}</select>
-        <div className="settings-rule" /><div className="required-setting"><span><b>Required</b><small>Respondents must answer this question</small></span><button className={`switch ${question.required ? "checked" : ""}`} aria-label="Toggle required" aria-pressed={question.required} onClick={() => onRequired(!question.required)}><i /></button></div>
-        <div className="settings-note"><span>↳</span> Your question and description are edited directly on the canvas.</div>
+      <aside className="question-settings"><div className="settings-heading"><span>QUESTION SETTINGS</span><span className="settings-question-number">{question ? String(questionIndex + 1).padStart(2, "0") : "—"}</span></div>{question ? <>
+        <section className="settings-section"><span className="settings-section-title">QUESTION TYPE</span><select id="question-type" className="type-select" value={question.type} onChange={(event) => onType(event.target.value as QuestionType)}>{questionTypes.map((item) => <option value={item.type} key={item.type}>{item.label}</option>)}</select><small className="settings-help">Choose how respondents will answer.</small></section>
+        <section className="settings-section"><span className="settings-section-title">ANSWER BEHAVIOR</span><div className="required-setting"><span><b>Required</b><small>Respondents must answer this question</small></span><button className={`switch ${question.required ? "checked" : ""}`} aria-label="Toggle required" aria-pressed={question.required} onClick={() => onRequired(!question.required)}><i /></button></div></section>
+        {isChoice && <section className="settings-section settings-choice-note"><span className="settings-section-title">CHOICES</span><p>Edit answer choices on the question canvas.</p></section>}
+        <div className="settings-note"><span>↳</span> Edit question text and description directly on the canvas.</div>
       </> : <p className="no-question-settings">Select a question to edit its settings.</p>}</aside>
     </div>{toast && <Toast message={toast} />}
   </main>;
@@ -313,23 +420,53 @@ function ConversationalFlow({ form, onBack, onComplete, preview = false }: { for
   const [error, setError] = useState("");
   const [direction, setDirection] = useState<"forward" | "backward">("forward");
   const [complete, setComplete] = useState(false);
+  const [finalConfirmed, setFinalConfirmed] = useState(false);
+  const submissionStarted = useRef(false);
   const question = form.questions[index];
+  const choose = (value: string) => {
+    if (!question) return;
+    const updated = { ...answers, [question.id]: value };
+    setAnswers(updated); setError("");
+    if (index === form.questions.length - 1) setFinalConfirmed(false);
+  };
   const previous = () => { if (index > 0) { setError(""); setDirection("backward"); setIndex((value) => value - 1); } else if (preview) onBack(); };
-  const next = (nextAnswers = answers) => {
+  const confirmAnswer = (nextAnswers = answers) => {
     if (!question) return;
     const value = (nextAnswers[question.id] ?? "").trim();
     const invalid = validateAnswer(question, value);
     if (invalid) { setError(invalid); return; }
     setError("");
     if (index < form.questions.length - 1) { setDirection("forward"); setIndex((value) => value + 1); }
-    else { onComplete(nextAnswers); setComplete(true); }
+    else setFinalConfirmed(true);
+  };
+  const submitResponse = () => {
+    if (!question || index !== form.questions.length - 1 || !finalConfirmed || submissionStarted.current) return;
+    const invalid = form.questions.map((item) => validateAnswer(item, (answers[item.id] ?? "").trim())).find(Boolean);
+    if (invalid) { setError(invalid); return; }
+    submissionStarted.current = true;
+    onComplete(answers);
+    setComplete(true);
   };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target;
-      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return;
+      if (event.key === "Enter" && target instanceof HTMLElement && target.closest("[data-submit-response]")) return;
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLElement && target.isContentEditable) return;
+      if (target instanceof HTMLSelectElement || target instanceof HTMLButtonElement) {
+        if (event.key === "Enter") { event.preventDefault(); confirmAnswer(); }
+        return;
+      }
+      if (question?.type === "multiple_choice" && /^[a-z]$/i.test(event.key)) {
+        const choiceIndex = event.key.toUpperCase().charCodeAt(0) - 65;
+        const option = question.options[choiceIndex];
+        if (option) { event.preventDefault(); choose(option); return; }
+      }
+      if (question?.type === "yes_no" && /^[yn]$/i.test(event.key)) {
+        const value = event.key.toLowerCase() === "y" ? "Yes" : "No";
+        event.preventDefault(); choose(value); return;
+      }
       if (event.key === "ArrowLeft") { event.preventDefault(); previous(); }
-      if (event.key === "ArrowRight" || event.key === "Enter") { event.preventDefault(); next(); }
+      if (event.key === "ArrowRight" || event.key === "Enter") { event.preventDefault(); confirmAnswer(); }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -338,28 +475,23 @@ function ConversationalFlow({ form, onBack, onComplete, preview = false }: { for
   if (complete) return <ThankYouScreen form={form} preview={preview} onExit={onBack} />;
   if (!question) return <main className="respondent-shell"><button className="respondent-exit" onClick={onBack}>← Exit</button><p className="respondent-message">This form has no questions yet.</p></main>;
   const type = question.type;
-  const choose = (value: string, advance = false) => {
-    const updated = { ...answers, [question.id]: value };
-    setAnswers(updated); setError("");
-    if (advance) window.setTimeout(() => next(updated), 190);
-  };
   return <main className="respondent-shell">
     <div className="respondent-topline"><button className="respondent-brand" onClick={onBack}><span className="brand-mini">f</span><span>{form.title}</span></button><span className="respondent-step">{String(index + 1).padStart(2, "0")} <i>/</i> {String(form.questions.length).padStart(2, "0")}</span><button className="respondent-exit" onClick={onBack}>{preview ? "Exit preview" : "Exit"}</button></div>
-    <div className="respondent-progress" aria-label={`Question ${index + 1} of ${form.questions.length}`}><span style={{ width: `${((index + 1) / form.questions.length) * 100}%` }} /></div>
+    <div className="respondent-progress" role="progressbar" aria-label="Form progress" aria-valuemin={0} aria-valuemax={form.questions.length} aria-valuenow={index + 1}><span style={{ width: `${((index + 1) / form.questions.length) * 100}%` }} /></div>
     <section className={`respondent-content ${direction}`} key={question.id}>
       <div className="respondent-question-number">{String(index + 1).padStart(2, "0")} <span>→</span></div>
       <h1>{question.title}<sup>{question.required ? "*" : ""}</sup></h1>
       {question.description && <p className="respondent-description">{question.description}</p>}
       <div className="respondent-answer">
-        {type === "multiple_choice" && <div className="respondent-options">{question.options.map((option, optionIndex) => <button key={optionIndex} className={`respondent-option ${answers[question.id] === option ? "selected" : ""}`} onClick={() => choose(option, true)}><span>{String.fromCharCode(65 + optionIndex)}</span>{option}</button>)}</div>}
+        {type === "multiple_choice" && <div className="respondent-options" role="group" aria-label="Answer choices">{question.options.map((option, optionIndex) => <button key={optionIndex} className={`respondent-option ${answers[question.id] === option ? "selected" : ""}`} onClick={() => choose(option)}><span>{String.fromCharCode(65 + optionIndex)}</span>{option}</button>)}</div>}
         {type === "dropdown" && <select className="respondent-select" value={answers[question.id] ?? ""} onChange={(event) => choose(event.target.value)}><option value="" disabled>Select an option…</option>{question.options.map((option, optionIndex) => <option value={option} key={optionIndex}>{option}</option>)}</select>}
-        {type === "yes_no" && <div className="respondent-options horizontal">{["Yes", "No"].map((option, optionIndex) => <button key={option} className={`respondent-option ${answers[question.id] === option ? "selected" : ""}`} onClick={() => choose(option, true)}><span>{optionIndex ? "B" : "A"}</span>{option}</button>)}</div>}
+        {type === "yes_no" && <div className="respondent-options horizontal">{["Yes", "No"].map((option, optionIndex) => <button key={option} className={`respondent-option ${answers[question.id] === option ? "selected" : ""}`} onClick={() => choose(option)}><span>{optionIndex ? "B" : "A"}</span>{option}</button>)}</div>}
         {type === "rating" && <div className="rating-options" role="radiogroup" aria-label="Choose a rating">{[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((number) => <button role="radio" aria-checked={answers[question.id] === String(number)} className={answers[question.id] === String(number) ? "selected" : ""} key={number} onClick={() => choose(String(number))}>{number}</button>)}</div>}
-        {type === "long_text" && <textarea autoFocus className="respondent-textarea" placeholder="Type your answer here…" value={answers[question.id] ?? ""} onChange={(event) => choose(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); next(); } }} />}
-        {(type === "short_text" || type === "email" || type === "number") && <input autoFocus className="respondent-input" type={type === "email" ? "email" : type === "number" ? "number" : "text"} placeholder={questionTypes.find((item) => item.type === type)?.placeholder} value={answers[question.id] ?? ""} onChange={(event) => choose(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); next(); } }} />}
+        {type === "long_text" && <textarea autoFocus className="respondent-textarea" placeholder="Type your answer here…" value={answers[question.id] ?? ""} onChange={(event) => choose(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); confirmAnswer(); } }} />}
+        {(type === "short_text" || type === "email" || type === "number") && <input autoFocus className="respondent-input" type={type === "email" ? "email" : type === "number" ? "number" : "text"} placeholder={questionTypes.find((item) => item.type === type)?.placeholder} value={answers[question.id] ?? ""} onChange={(event) => choose(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); confirmAnswer(); } }} />}
       </div>
       {error && <p className="validation-error" role="alert">{error}</p>}
-      <div className="respondent-controls"><button className="button primary respondent-continue" onClick={() => next()}>{index === form.questions.length - 1 ? "Submit" : "OK"}<span>↵</span></button><span className="enter-hint">press <kbd>Enter ↵</kbd></span><button className="back-question" disabled={index === 0 && !preview} onClick={previous}>← Back</button></div>
+      <div className="respondent-controls"><button className="button primary respondent-continue" onClick={() => confirmAnswer()} disabled={index === form.questions.length - 1 && finalConfirmed}>{index === form.questions.length - 1 && finalConfirmed ? "Answer confirmed" : "OK"}<span>↵</span></button>{index === form.questions.length - 1 && <button className="button quiet respondent-submit" data-submit-response onClick={submitResponse} disabled={!finalConfirmed}>Submit form</button>}<span className="enter-hint">press <kbd>Enter ↵</kbd></span><button className="back-question" disabled={index === 0 && !preview} onClick={previous}>← Back</button></div>
     </section>
     <footer className="respondent-footer"><span>Powered by <b>formcraft</b></span><span>{Math.round(((index + 1) / form.questions.length) * 100)}% completed</span></footer>
   </main>;
@@ -384,16 +516,36 @@ function Results({ form, summaries, responseIndex, onBack, onEdit, onResponse, o
   form: FormData; summaries: { question: Question; answers: string[] }[]; responseIndex: number | null;
   onBack: () => void; onEdit: () => void; onResponse: (index: number) => void; onCloseResponse: () => void;
 }) {
+  const [tab, setTab] = useState<"summary" | "responses">("summary");
+  const [responseQuery, setResponseQuery] = useState("");
+  useEffect(() => {
+    if (responseIndex === null) return;
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onCloseResponse(); };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [responseIndex, onCloseResponse]);
   const exportCsv = () => {
     const rows = [form.questions.map((question) => question.title), ...form.responses.map((response) => form.questions.map((question) => response[question.id] ?? ""))];
     const csv = rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\n");
     const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" })); link.download = `${form.title}.csv`; link.click(); URL.revokeObjectURL(link.href);
   };
+  const responseRows = form.responses.map((response, index) => ({ response, index })).filter(({ response, index }) => `response ${index + 1} ${Object.values(response).join(" ")}`.toLowerCase().includes(responseQuery.toLowerCase())).reverse();
   return <div className="workspace-shell"><aside className="workspace-rail"><a className="wordmark" href="#home"><span className="wordmark-symbol">f</span>formcraft</a><div className="workspace-name"><span className="workspace-avatar">S</span><span><b>Studio workspace</b><small>Free plan</small></span></div><nav className="workspace-nav"><span className="nav-caption">WORKSPACE</span><button className="workspace-nav-item selected" onClick={onBack}><span>▤</span> All forms</button></nav></aside>
-    <main className="workspace-main"><header className="workspace-top"><button className="back-to-forms" onClick={onBack}>← Forms</button><span className="header-spacer" /><button className="button quiet" onClick={onEdit}>Edit form</button></header><div className="results-content"><div className="results-heading"><div><span className="overline">RESULTS</span><h1>{form.title}</h1><p>Responses from your form</p></div><button className="button quiet" onClick={exportCsv}>↓ Export CSV</button></div><div className="results-overview"><div><span>RESPONSES</span><b>{form.responses.length}</b></div><div><span>QUESTIONS</span><b>{form.questions.length}</b></div><div><span>STATUS</span><b className={`form-status ${form.status.toLowerCase()}`}><i />{form.status}</b></div></div>
-      <section className="result-section"><div className="result-section-heading"><div><h2>Question summary</h2><p>Answers grouped by question</p></div></div>{summaries.map(({ question, answers }, questionIndex) => <article className="summary-item" key={question.id}><header><span>{String(questionIndex + 1).padStart(2, "0")}</span><b>{question.title}</b><small>{answers.length} answers</small></header>{question.type === "multiple_choice" || question.type === "dropdown" ? question.options.map((option) => { const count = answers.filter((answer) => answer === option).length; const percentage = answers.length ? Math.round(count / answers.length * 100) : 0; return <div className="summary-bar" key={option}><span>{option}</span><div><i style={{ width: `${percentage}%` }} /></div><b>{count}</b></div>; }) : <div className="answer-cloud">{answers.length ? answers.map((answer, index) => <span key={`${index}-${answer}`}>{answer}</span>) : <em>No answers yet</em>}</div>}</article>)}</section>
-      <section className="result-section"><div className="result-section-heading"><div><h2>Responses</h2><p>Individual submissions</p></div></div>{form.responses.length === 0 ? <div className="empty-results">No responses yet. Share your form to start collecting answers.</div> : <div className="response-table"><div className="response-table-head"><span>RESPONSE</span><span>SUBMITTED</span><span>ANSWERS</span><span /></div>{form.responses.map((response, index) => <article className="response-row" key={index}><b>Response {String(index + 1).padStart(3, "0")}</b><span>{dateLabel(form.responseDates?.[index])}</span><span>{Object.values(response).filter(Boolean).length} answers</span><button onClick={() => onResponse(index)}>View response →</button></article>)}</div>}</section>
+    <main className="workspace-main"><header className="workspace-top"><button className="back-to-forms" onClick={onBack}>← Forms</button><span className="header-spacer" /><button className="button quiet" onClick={onEdit}>Edit form</button></header><div className="results-content">
+      <div className="results-heading"><div><span className="overline">RESULTS</span><h1>{form.title}</h1><p>Review your form’s performance and responses.</p></div><button className="button quiet" onClick={exportCsv}>↓ Export CSV</button></div>
+      <div className="results-overview"><div><span>RESPONSES</span><b>{form.responses.length}</b></div><div><span>QUESTIONS</span><b>{form.questions.length}</b></div><div><span>STATUS</span><b className={`form-status ${form.status.toLowerCase()}`}><i />{form.status}</b></div></div>
+      <div className="results-tabs" role="tablist" aria-label="Results views"><button role="tab" aria-selected={tab === "summary"} className={tab === "summary" ? "active" : ""} onClick={() => setTab("summary")}>Summary</button><button role="tab" aria-selected={tab === "responses"} className={tab === "responses" ? "active" : ""} onClick={() => setTab("responses")}>Responses <span>{form.responses.length}</span></button></div>
+      {tab === "summary" ? <section className="result-section"><div className="result-section-heading"><div><h2>Question summary</h2><p>See how people answered each question.</p></div></div>{summaries.map(({ question, answers }, questionIndex) => {
+        const chartOptions = question.type === "multiple_choice" || question.type === "dropdown" ? question.options : question.type === "yes_no" ? ["Yes", "No"] : question.type === "rating" ? Array.from({ length: 10 }, (_, index) => String(index + 1)) : [];
+        const numbers = question.type === "number" ? answers.map(Number).filter(Number.isFinite).sort((a, b) => a - b) : [];
+        const median = numbers.length ? numbers.length % 2 ? numbers[(numbers.length - 1) / 2] : (numbers[numbers.length / 2 - 1] + numbers[numbers.length / 2]) / 2 : 0;
+        return <article className="summary-item" key={question.id}><header><span>{String(questionIndex + 1).padStart(2, "0")}</span><b>{question.title}</b><small>{answers.length} answers</small></header>
+          {chartOptions.length ? <div className="summary-bars">{chartOptions.map((option) => { const count = answers.filter((answer) => answer === option).length; const percentage = answers.length ? Math.round(count / answers.length * 100) : 0; return <div className="summary-bar" key={option}><span>{option}</span><div><i style={{ width: `${percentage}%` }} /></div><b>{count}</b><small>{percentage}%</small></div>; })}</div>
+          : question.type === "number" ? numbers.length ? <div className="number-summary"><div><span>AVERAGE</span><b>{(numbers.reduce((sum, value) => sum + value, 0) / numbers.length).toFixed(1)}</b></div><div><span>MEDIAN</span><b>{median}</b></div><div><span>RANGE</span><b>{numbers[0]}–{numbers[numbers.length - 1]}</b></div></div> : <div className="answer-cloud"><em>No answers yet</em></div>
+          : <div className="answer-cloud">{answers.length ? answers.map((answer, index) => <span key={`${index}-${answer}`}>{answer}</span>) : <em>No answers yet</em>}</div>}
+        </article>;
+      })}</section> : <section className="result-section response-list-section"><div className="result-section-heading"><div><h2>Responses</h2><p>Individual submissions, newest first.</p></div><label className="search-field response-search"><span>⌕</span><input aria-label="Search responses" placeholder="Search responses" value={responseQuery} onChange={(event) => setResponseQuery(event.target.value)} /></label></div>{responseRows.length === 0 ? <div className="empty-results">{responseQuery ? "No responses match your search." : "No responses yet. Share your form to start collecting answers."}</div> : <div className="response-table"><div className="response-table-head"><span>RESPONSE</span><span>SUBMITTED</span><span>ANSWERS</span><span /></div>{responseRows.map(({ response, index }) => <article className="response-row" key={index}><b>Response {String(index + 1).padStart(3, "0")}</b><span>{dateLabel(form.responseDates?.[index])}</span><span>{Object.values(response).filter(Boolean).length} answers</span><button onClick={() => onResponse(index)}>View response →</button></article>)}</div>}</section>}
     </div></main>
-    {responseIndex !== null && form.responses[responseIndex] && <div className="modal-scrim" onClick={onCloseResponse}><section className="response-detail" onClick={(event) => event.stopPropagation()}><header><div><span className="overline">SUBMISSION DETAIL</span><h2>Response {String(responseIndex + 1).padStart(3, "0")}</h2><small>{dateLabel(form.responseDates?.[responseIndex])}</small></div><button onClick={onCloseResponse} aria-label="Close response">×</button></header><div className="detail-answers">{form.questions.map((question, index) => <article key={question.id}><span>QUESTION {String(index + 1).padStart(2, "0")}</span><b>{question.title}</b><p>{form.responses[responseIndex][question.id] || "No answer"}</p></article>)}</div></section></div>}
+    {responseIndex !== null && form.responses[responseIndex] && <div className="modal-scrim" onClick={onCloseResponse}><section className="response-detail" role="dialog" aria-modal="true" aria-labelledby="response-detail-title" onClick={(event) => event.stopPropagation()}><header><div><span className="overline">SUBMISSION DETAIL</span><h2 id="response-detail-title">Response {String(responseIndex + 1).padStart(3, "0")}</h2><small>{dateLabel(form.responseDates?.[responseIndex])}</small></div><button onClick={onCloseResponse} aria-label="Close response">×</button></header><div className="detail-answers">{form.questions.map((question, index) => <article key={question.id}><span>QUESTION {String(index + 1).padStart(2, "0")}</span><b>{question.title}</b><p>{form.responses[responseIndex][question.id] || "No answer"}</p></article>)}</div></section></div>}
   </div>;
 }
