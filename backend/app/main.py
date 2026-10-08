@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from . import database
 
-app = FastAPI(title="Formcraft API", version="1.0.0")
+app = FastAPI(title="FormMaker API", version="1.0.0")
 origins = [origin.strip() for origin in os.getenv("FORMCRAFT_CORS_ORIGINS", "http://localhost:3000").split(",") if origin.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_origin_regex=r"https://[a-zA-Z0-9-]+\.vercel\.app", allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
@@ -79,9 +79,11 @@ def submit_response(form_id: str, submission: Submission):
         if value and q.get("type") == "yes_no" and value not in ("Yes", "No"):
             raise HTTPException(422, "Choose Yes or No")
         if value and q.get("type") == "rating":
+            configured_max = q.get("ratingMax", 10)
+            max_rating = configured_max if isinstance(configured_max, int) and not isinstance(configured_max, bool) and 3 <= configured_max <= 10 else 10
             try:
                 rating = int(value)
-                if str(rating) != value or not 1 <= rating <= 10: raise ValueError
-            except ValueError: raise HTTPException(422, "Choose a rating from 1 to 10")
+                if str(rating) != value or not 1 <= rating <= max_rating: raise ValueError
+            except ValueError: raise HTTPException(422, f"Choose a rating from 1 to {max_rating}")
     database.add_response(form_id, submission.answers)
     return {"ok": True, "submittedAt": datetime.now(timezone.utc).isoformat()}

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Formcraft — forms that feel human",
+  title: "FormMaker — forms that feel human",
   description: "Build conversational forms and collect thoughtful responses.",
 };
 

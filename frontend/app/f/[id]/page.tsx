@@ -83,15 +83,15 @@ function PublicFormContent() {
     return () => window.removeEventListener("keydown", handler);
   });
 
-  if (loading || !form) return <main className="respondent-shell"><div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">f</span>formcraft</span><ThemeSwitcher variant="respondent" /></div><section className="respondent-content" aria-live="polite"><h1>{loading ? "Loading your form…" : error}</h1>{!loading && <button className="button quiet" onClick={() => { setForm(null); setError(""); setLoading(true); setLoadAttempt((attempt) => attempt + 1); }}>Try again</button>}</section><footer className="respondent-footer"><span>Powered by <b>formcraft</b></span></footer></main>;
-  if (done) return <main className="respondent-shell thank-you"><div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">f</span>{form.title}</span><ThemeSwitcher variant="respondent" /></div><div className="thank-you-card"><span className="thank-you-mark">✳</span><span className="overline">RESPONSE COMPLETE</span><h1>Thank you for your time.</h1><p>Your answers have been submitted.</p></div><footer className="respondent-footer"><span>Powered by <b>formcraft</b></span></footer></main>;
-  if (!current) return <main className="respondent-shell"><div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">f</span>{form.title}</span><ThemeSwitcher variant="respondent" /></div><section className="respondent-content"><h1>This form has no questions yet.</h1></section></main>;
+  if (loading || !form) return <main className="respondent-shell"><div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">M</span>FormMaker</span><ThemeSwitcher variant="respondent" /></div><section className="respondent-content" aria-live="polite"><h1>{loading ? "Loading your form…" : error}</h1>{!loading && <button className="button quiet" onClick={() => { setForm(null); setError(""); setLoading(true); setLoadAttempt((attempt) => attempt + 1); }}>Try again</button>}</section><footer className="respondent-footer"><span>Powered by <b>FormMaker</b></span></footer></main>;
+  if (done) return <main className="respondent-shell thank-you"><div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">M</span>{form.title}</span><ThemeSwitcher variant="respondent" /></div><div className="thank-you-card"><span className="thank-you-mark">✳</span><span className="overline">RESPONSE COMPLETE</span><h1>Thank you for your time.</h1><p>Your answers have been submitted.</p></div><footer className="respondent-footer"><span>Powered by <b>FormMaker</b></span></footer></main>;
+  if (!current) return <main className="respondent-shell"><div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">M</span>{form.title}</span><ThemeSwitcher variant="respondent" /></div><section className="respondent-content"><h1>This form has no questions yet.</h1></section></main>;
 
   const selected = answers[current.id] ?? "";
   const choose = (value: string) => setAnswer(value);
   const progress = Math.round(((index + 1) / form.questions.length) * 100);
   return <main className="respondent-shell">
-    <div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">f</span><span>{form.title}</span></span><span className="respondent-step">{String(index + 1).padStart(2, "0")} <i>/</i> {String(form.questions.length).padStart(2, "0")}</span><ThemeSwitcher variant="respondent" /></div>
+    <div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">M</span><span>{form.title}</span></span><span className="respondent-step">{String(index + 1).padStart(2, "0")} <i>/</i> {String(form.questions.length).padStart(2, "0")}</span><ThemeSwitcher variant="respondent" /></div>
     <div className="respondent-progress" role="progressbar" aria-label="Form progress" aria-valuemin={0} aria-valuemax={form.questions.length} aria-valuenow={index + 1}><span style={{ width: `${progress}%` }} /></div>
     <section className={`respondent-content ${direction}`} key={current.id}>
       <div className="respondent-question-number">{String(index + 1).padStart(2, "0")} <span>→</span></div><h1>{current.title}<sup>{current.required ? "*" : ""}</sup></h1>
@@ -106,12 +106,12 @@ function PublicFormContent() {
       </div>
       {error && <p className="validation-error" role="alert">{error}</p>}
       <div className="respondent-controls"><button className="button primary respondent-continue" onClick={() => confirmAnswer()} disabled={index === form.questions.length - 1 && finalConfirmed}>{index === form.questions.length - 1 && finalConfirmed ? "Answer confirmed" : "OK"}<span>↵</span></button>{index === form.questions.length - 1 && <button className="button quiet respondent-submit" data-submit-response disabled={!finalConfirmed || busy} onClick={() => void submitResponse()}>{busy ? "Submitting…" : "Submit form"}</button>}<span className="enter-hint">press <kbd>Enter ↵</kbd></span><button className="back-question" disabled={index === 0} onClick={back}>← Back</button></div>
-    </section><footer className="respondent-footer"><span>Powered by <b>formcraft</b></span><span>{progress}% completed</span></footer>
+    </section><footer className="respondent-footer"><span>Powered by <b>FormMaker</b></span><span>{progress}% completed</span></footer>
   </main>;
 }
 
 export default function PublicFormPage() {
-  return <Suspense fallback={<main className="respondent-shell"><div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">f</span>formcraft</span><ThemeSwitcher variant="respondent" /></div><section className="respondent-content"><h1>Loading your form…</h1></section></main>}><PublicFormContent /></Suspense>;
+  return <Suspense fallback={<main className="respondent-shell"><div className="respondent-topline"><span className="respondent-brand"><span className="brand-mini">M</span>FormMaker</span><ThemeSwitcher variant="respondent" /></div><section className="respondent-content"><h1>Loading your form…</h1></section></main>}><PublicFormContent /></Suspense>;
 }
 
 function validate(question: Question, value: string): string {

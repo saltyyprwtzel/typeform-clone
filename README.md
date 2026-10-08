@@ -1,6 +1,6 @@
-# Formcraft
+# FormMaker
 
-Formcraft is a Typeform-inspired form builder and one-question-at-a-time respondent experience built for the Scaler full-stack assessment. It supports creating and publishing forms, collecting public responses, and reviewing results.
+FormMaker is a Typeform-inspired form builder and one-question-at-a-time respondent experience built for the Scaler full-stack assessment. It supports creating and publishing forms, collecting public responses, and reviewing results.
 
 ## Technology
 
