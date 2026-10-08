@@ -240,10 +240,10 @@ export default function Home() {
     setForms((items) => [duplicate, ...items]);
     notify("Form duplicated");
   };
-  const renameForm = (formId: string) => {
+  const renameForm = (formId: string, nextTitle: string) => {
     const form = displayForms.find((item) => item.id === formId);
     if (!form) return;
-    const title = window.prompt("Rename form", form.title)?.trim();
+    const title = nextTitle.trim();
     if (!title || title === form.title) return;
     const updatedForm = { ...form, title, updated: new Date().toISOString() };
     setForms((items) => items.some((item) => item.id === formId)
@@ -405,7 +405,7 @@ function Dashboard({ forms, totalForms, responseTotal, query, onQuery, onCreate,
   forms: FormData[]; totalForms: number; responseTotal: number; query: string; onQuery: (value: string) => void; onCreate: () => void;
   onOpen: (form: FormData) => void; onDuplicate: (form: FormData) => void; onDelete: (id: string) => void;
   onShare: (form: FormData) => void; onResults: (form: FormData) => void;
-  onPreview: (form: FormData) => void; onRename: (id: string) => void; onPublish: (id: string) => void; onComingSoon: (feature: string) => void; onSettings: () => void;
+  onPreview: (form: FormData) => void; onRename: (id: string, title: string) => void; onPublish: (id: string) => void; onComingSoon: (feature: string) => void; onSettings: () => void;
   workspaceName: string; onRenameWorkspace: (name: string) => void;
 }) {
   const theme = useTheme();
@@ -416,6 +416,8 @@ function Dashboard({ forms, totalForms, responseTotal, query, onQuery, onCreate,
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [workspaceNameDraft, setWorkspaceNameDraft] = useState(workspaceName);
+  const [renameFormId, setRenameFormId] = useState("");
+  const [renameFormDraft, setRenameFormDraft] = useState("");
   const workspaceMenuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -423,11 +425,18 @@ function Dashboard({ forms, totalForms, responseTotal, query, onQuery, onCreate,
         setOpenMenu("");
         setWorkspaceMenuOpen(false);
         setRenameDialogOpen(false);
+        setRenameFormId("");
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+  useEffect(() => {
+    if (!renameDialogOpen && !renameFormId) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previousOverflow; };
+  }, [renameDialogOpen, renameFormId]);
   useEffect(() => {
     if (!workspaceMenuOpen) return;
     const onPointerDown = (event: PointerEvent) => {
@@ -451,8 +460,8 @@ function Dashboard({ forms, totalForms, responseTotal, query, onQuery, onCreate,
           <div className={`form-collection ${displayMode}`}>
             {visibleForms.map((form, index) => <article className="form-row" key={form.id}>
               <div className="form-identity"><button className={`form-cover cover-${index % 4}`} onClick={() => onOpen(form)} aria-label={`Edit ${form.title}`}><FormThemeIcon theme={theme} /></button><button className="form-name" onClick={() => onOpen(form)}><b>{form.title}</b><small><span className={`inline-form-status ${form.status.toLowerCase()}`}>{form.status}</span> · Updated {new Date(form.updated).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}</small></button></div>
-              <button className="response-link" onClick={() => onResults(form)}>{form.responses.length}</button><span className="form-completed" title="Only completed submissions are stored; partial responses are not tracked.">{form.responses.length}</span><span className="form-edited">{new Date(form.updated).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}</span><span className="form-integrations" title={form.status === "Published" ? "Published form link available" : "No live form link"} aria-label={form.status === "Published" ? "Published form link available" : "No live form link"}>{form.status === "Published" ? "↗" : "—"}</span>
-              <div className="form-menu-wrap"><button className="form-menu-trigger" aria-label={`Actions for ${form.title}`} aria-haspopup="menu" aria-expanded={openMenu === form.id} onClick={() => setOpenMenu(openMenu === form.id ? "" : form.id)}>•••</button>{openMenu === form.id && <div className="form-actions-menu" role="menu"><button role="menuitem" onClick={() => performAction(() => onOpen(form))}>Edit</button><button role="menuitem" onClick={() => performAction(() => onPreview(form))}>Preview</button><button role="menuitem" onClick={() => performAction(() => onResults(form))}>Results</button>{form.status === "Published" && <button role="menuitem" onClick={() => performAction(() => onShare(form))}>Share / copy link</button>}<button role="menuitem" onClick={() => performAction(() => onRename(form.id))}>Rename</button><button role="menuitem" onClick={() => performAction(() => onPublish(form.id))}>{form.status === "Published" ? "Unpublish" : "Publish"}</button><button role="menuitem" onClick={() => performAction(() => onDuplicate(form))}>Duplicate</button><span /><button className="danger-action" role="menuitem" onClick={() => performAction(() => onDelete(form.id))}>Delete</button></div>}</div>
+              <button className="response-link" onClick={() => onResults(form)}>{form.responses.length}</button><span className="form-completed" title="Only completed submissions are stored; partial responses are not tracked.">{form.responses.length}</span><span className="form-edited">{new Date(form.updated).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}</span>{form.status === "Published" ? <button className="form-integrations form-link-button" aria-label={`Open share link for ${form.title}`} title={`Open share link for ${form.title}`} onClick={() => onShare(form)}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13.5a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.72"/><path d="M14 10.5a5 5 0 0 0-7.07 0l-3 3A5 5 0 0 0 11 20.57l1.72-1.72"/></svg></button> : <span className="form-integrations" aria-label="No public form link">—</span>}
+              <div className="form-menu-wrap"><button className="form-menu-trigger" aria-label={`Actions for ${form.title}`} aria-haspopup="menu" aria-expanded={openMenu === form.id} onClick={() => setOpenMenu(openMenu === form.id ? "" : form.id)}>•••</button>{openMenu === form.id && <div className="form-actions-menu" role="menu"><button role="menuitem" onClick={() => performAction(() => onOpen(form))}>Edit</button><button role="menuitem" onClick={() => performAction(() => onPreview(form))}>Preview</button><button role="menuitem" onClick={() => performAction(() => onResults(form))}>Results</button><button role="menuitem" onClick={() => performAction(() => { setRenameFormId(form.id); setRenameFormDraft(form.title); })}>Rename</button><button role="menuitem" onClick={() => performAction(() => onPublish(form.id))}>{form.status === "Published" ? "Unpublish" : "Publish"}</button><button role="menuitem" onClick={() => performAction(() => onDuplicate(form))}>Duplicate</button><span /><button className="danger-action" role="menuitem" onClick={() => performAction(() => onDelete(form.id))}>Delete</button></div>}</div>
             </article>)}
           </div>
           {!visibleForms.length && <div className="empty-library">{query || statusFilter !== "All" ? "No forms match these filters." : <>Your workspace is ready. <button onClick={onCreate}>Create your first form</button></>}</div>}
@@ -460,6 +469,7 @@ function Dashboard({ forms, totalForms, responseTotal, query, onQuery, onCreate,
       </div>
     </main>
     {renameDialogOpen && <div className="modal-scrim" onClick={() => setRenameDialogOpen(false)}><section className="share-panel workspace-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="workspace-rename-title" onClick={(event) => event.stopPropagation()}><header><div><span className="overline">WORKSPACE</span><h2 id="workspace-rename-title">Rename workspace</h2></div><button className="share-close" aria-label="Close rename dialog" onClick={() => setRenameDialogOpen(false)}>×</button></header><form className="workspace-rename-form" onSubmit={(event) => { event.preventDefault(); if (!workspaceNameDraft.trim()) return; onRenameWorkspace(workspaceNameDraft); setRenameDialogOpen(false); }}><label htmlFor="workspace-name-input">WORKSPACE NAME</label><input id="workspace-name-input" autoFocus value={workspaceNameDraft} onChange={(event) => setWorkspaceNameDraft(event.target.value)} /><div className="workspace-rename-actions"><button className="button quiet" type="button" onClick={() => setRenameDialogOpen(false)}>Cancel</button><button className="button primary" type="submit" disabled={!workspaceNameDraft.trim()}>Rename</button></div></form></section></div>}
+    {renameFormId && <div className="modal-scrim" onClick={() => setRenameFormId("")}><section className="share-panel workspace-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="form-rename-title" onClick={(event) => event.stopPropagation()}><header><div><span className="overline">FORM</span><h2 id="form-rename-title">Rename form</h2></div><button className="share-close" aria-label="Close rename form dialog" onClick={() => setRenameFormId("")}>×</button></header><form className="workspace-rename-form" onSubmit={(event) => { event.preventDefault(); if (!renameFormDraft.trim()) return; onRename(renameFormId, renameFormDraft); setRenameFormId(""); }}><label htmlFor="form-name-input">FORM NAME</label><input id="form-name-input" autoFocus value={renameFormDraft} onChange={(event) => setRenameFormDraft(event.target.value)} /><div className="workspace-rename-actions"><button className="button quiet" type="button" onClick={() => setRenameFormId("")}>Cancel</button><button className="button primary" type="submit" disabled={!renameFormDraft.trim()}>Rename</button></div></form></section></div>}
   </div>;
 }
 
