@@ -34,15 +34,32 @@ const starterForms: FormData[] = [
     questions: [
       { id: "q1", type: "short_text", title: "What should we call you?", required: true, description: "", options: [] },
       { id: "q2", type: "multiple_choice", title: "How was your experience?", required: true, description: "", options: ["Great", "Pretty good", "It was okay", "Not great"] },
-      { id: "q3", type: "rating", title: "How likely are you to recommend us?", required: true, description: "", options: [] },
-    ], responses: [{ q1: "Taylor", q2: "Great", q3: "9" }, { q1: "Jordan", q2: "Pretty good", q3: "8" }],
+      { id: "q3", type: "rating", title: "How likely are you to recommend us?", required: true, description: "", options: [], ratingMax: 10 },
+      { id: "q4", type: "long_text", title: "What could we improve?", required: true, description: "Share any details that would help us do better.", options: [] },
+      { id: "q5", type: "dropdown", title: "How did you hear about us?", required: true, description: "", options: ["Search engine", "Social media", "A friend", "Other"] },
+      { id: "q6", type: "email", title: "What's your email?", required: true, description: "", options: [] },
+      { id: "q7", type: "number", title: "How many times have you used our product?", required: true, description: "", options: [] },
+      { id: "q8", type: "yes_no", title: "Would you recommend us?", required: true, description: "", options: [] },
+    ], responses: [
+      { q1: "Taylor", q2: "Great", q3: "9", q4: "The onboarding was clear and easy.", q5: "A friend", q6: "taylor@example.com", q7: "4", q8: "Yes" },
+      { q1: "Jordan", q2: "Pretty good", q3: "8", q4: "I would love more reporting options.", q5: "Search engine", q6: "jordan@example.com", q7: "2", q8: "Yes" },
+    ],
   },
   {
-    id: "event", title: "Event registration", updated: new Date().toISOString(), status: "Draft",
+    id: "event", title: "Event registration", updated: new Date().toISOString(), status: "Published",
     questions: [
       { id: "q4", type: "short_text", title: "What's your name?", required: true, description: "", options: [] },
       { id: "q5", type: "email", title: "What's your email?", required: true, description: "We'll send your ticket here.", options: [] },
-    ], responses: [],
+      { id: "q6", type: "long_text", title: "Do you have any accessibility needs?", required: true, description: "Let us know how we can make the event comfortable for you.", options: [] },
+      { id: "q7", type: "multiple_choice", title: "Which session are you attending?", required: true, description: "", options: ["Morning", "Afternoon", "Both"] },
+      { id: "q8", type: "dropdown", title: "How did you hear about this event?", required: true, description: "", options: ["Email", "Website", "Social media", "Friend or colleague"] },
+      { id: "q9", type: "number", title: "How many guests are in your group?", required: true, description: "", options: [] },
+      { id: "q10", type: "yes_no", title: "Will you need parking?", required: true, description: "", options: [] },
+      { id: "q11", type: "rating", title: "How excited are you about the event?", required: true, description: "", options: [], ratingMax: 10 },
+    ], responses: [
+      { q4: "Alex Morgan", q5: "alex.morgan@example.com", q6: "I need step-free access.", q7: "Morning", q8: "Email", q9: "2", q10: "Yes", q11: "9" },
+      { q4: "Jamie Lee", q5: "jamie.lee@example.com", q6: "No special requirements.", q7: "Both", q8: "Website", q9: "1", q10: "No", q11: "8" },
+    ],
   },
 ];
 
@@ -53,7 +70,8 @@ const dateLabel = (value?: string) => {
 };
 
 export default function Home() {
-  const [forms, setForms] = useState<FormData[]>(starterForms);
+  // Keep persisted/offline forms separate from display-only demo fallback data.
+  const [forms, setForms] = useState<FormData[]>([]);
   const [view, setView] = useState<View>("dashboard");
   const theme = useTheme();
   const [activeId, setActiveId] = useState("");
@@ -120,7 +138,7 @@ export default function Home() {
       })
       .then((data) => {
         if (mounted) {
-          setForms(data.length ? data : localForms.length ? localForms : starterForms);
+          setForms(data);
           setCanonicalApiLoaded(true);
         }
       })
@@ -130,8 +148,8 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("formcraft-data", JSON.stringify(forms));
-    if (!apiReady || !canonicalApiLoaded) return;
+    if (apiReady) localStorage.setItem("formcraft-data", JSON.stringify(forms));
+    if (!apiReady || !canonicalApiLoaded || forms.length === 0) return;
     const snapshot = JSON.stringify({ forms });
     const timer = window.setTimeout(() => {
       setSaveState("saving");
@@ -145,9 +163,10 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [forms, apiReady, canonicalApiLoaded]);
 
-  const active = forms.find((form) => form.id === activeId) ?? forms[0];
+  const displayForms = forms.length ? forms : starterForms;
+  const active = displayForms.find((form) => form.id === activeId) ?? displayForms[0];
   const currentQuestion = active?.questions.find((question) => question.id === selectedQuestion) ?? active?.questions[0];
-  const filteredForms = forms.filter((form) => form.title.toLowerCase().includes(query.toLowerCase()));
+  const filteredForms = displayForms.filter((form) => form.title.toLowerCase().includes(query.toLowerCase()));
   const summaries = useMemo(() => active?.questions.map((question) => ({
     question,
     answers: active.responses.map((response) => response[question.id]).filter((answer): answer is string => Boolean(answer)),
@@ -159,7 +178,10 @@ export default function Home() {
   };
   const updateForm = (patch: Partial<FormData>) => {
     if (!active) return;
-    setForms((items) => items.map((form) => form.id === active.id ? { ...form, ...patch, updated: new Date().toISOString() } : form));
+    const updatedForm = { ...active, ...patch, updated: new Date().toISOString() };
+    setForms((items) => items.some((form) => form.id === active.id)
+      ? items.map((form) => form.id === active.id ? updatedForm : form)
+      : [updatedForm, ...items]);
   };
   const updateQuestion = (questionId: string, patch: Partial<Question>) => {
     if (!active) return;
@@ -184,18 +206,24 @@ export default function Home() {
     notify("Form duplicated");
   };
   const renameForm = (formId: string) => {
-    const form = forms.find((item) => item.id === formId);
+    const form = displayForms.find((item) => item.id === formId);
     if (!form) return;
     const title = window.prompt("Rename form", form.title)?.trim();
     if (!title || title === form.title) return;
-    setForms((items) => items.map((item) => item.id === formId ? { ...item, title, updated: new Date().toISOString() } : item));
+    const updatedForm = { ...form, title, updated: new Date().toISOString() };
+    setForms((items) => items.some((item) => item.id === formId)
+      ? items.map((item) => item.id === formId ? updatedForm : item)
+      : [updatedForm, ...items]);
     notify("Form renamed");
   };
   const setFormPublished = (formId: string) => {
-    const form = forms.find((item) => item.id === formId);
+    const form = displayForms.find((item) => item.id === formId);
     if (!form) return;
-    const nextStatus = form.status === "Published" ? "Draft" : "Published";
-    setForms((items) => items.map((item) => item.id === formId ? { ...item, status: nextStatus, updated: new Date().toISOString() } : item));
+    const nextStatus: FormData["status"] = form.status === "Published" ? "Draft" : "Published";
+    const updatedForm = { ...form, status: nextStatus, updated: new Date().toISOString() };
+    setForms((items) => items.some((item) => item.id === formId)
+      ? items.map((item) => item.id === formId ? updatedForm : item)
+      : [updatedForm, ...items]);
     notify(nextStatus === "Published" ? "Form published" : "Form unpublished");
   };
   const previewForm = (form: FormData) => {
@@ -290,12 +318,12 @@ export default function Home() {
     onRemoveOption={(index) => currentQuestion && updateQuestion(currentQuestion.id, { options: currentQuestion.options.filter((_, i) => i !== index) })}
     onSelectQuestion={setSelectedQuestion} onAddQuestion={addQuestion} onMove={moveQuestion} onMoveByKeyboard={moveByKeyboard}
     onDeleteQuestion={removeQuestion} onDuplicateQuestion={duplicateQuestion} onPreview={startPreview} onPublish={togglePublish} onShare={() => shareForm(active)} onResults={() => navigateToView("results", active.id)}
-  />{toast && <Toast message={toast} />}{shareFormId && forms.find((form) => form.id === shareFormId) && <SharePanel form={forms.find((form) => form.id === shareFormId)!} onClose={() => setShareFormId("")} onCopy={() => void copyShareLink(forms.find((form) => form.id === shareFormId)!)} />}</>;
+  />{toast && <Toast message={toast} />}{shareFormId && displayForms.find((form) => form.id === shareFormId) && <SharePanel form={displayForms.find((form) => form.id === shareFormId)!} onClose={() => setShareFormId("")} onCopy={() => void copyShareLink(displayForms.find((form) => form.id === shareFormId)!)} />}</>;
   if (view === "results" && active) return <><Results
     form={active} summaries={summaries} responseIndex={responseIndex}
     onBack={() => navigateToView("dashboard", active.id, true)} onEdit={() => openForm(active, "builder")}
     onResponse={setResponseIndex} onCloseResponse={() => setResponseIndex(null)}
-  />{toast && <Toast message={toast} />}{shareFormId && forms.find((form) => form.id === shareFormId) && <SharePanel form={forms.find((form) => form.id === shareFormId)!} onClose={() => setShareFormId("")} onCopy={() => void copyShareLink(forms.find((form) => form.id === shareFormId)!)} />}</>;
+  />{toast && <Toast message={toast} />}{shareFormId && displayForms.find((form) => form.id === shareFormId) && <SharePanel form={displayForms.find((form) => form.id === shareFormId)!} onClose={() => setShareFormId("")} onCopy={() => void copyShareLink(displayForms.find((form) => form.id === shareFormId)!)} />}</>;
 
   if (view === "settings") return <SettingsPage
     theme={theme} toast={toast} onTheme={chooseTheme}
@@ -304,7 +332,7 @@ export default function Home() {
     onComingSoon={(feature) => notify(`${feature} coming soon`)}
   />;
 
-  return <><Dashboard forms={filteredForms} totalForms={forms.length} responseTotal={forms.reduce((sum, form) => sum + form.responses.length, 0)} query={query} onQuery={setQuery} onCreate={createForm} onOpen={openForm} onDuplicate={duplicateForm} onDelete={deleteForm} onShare={shareForm} onResults={(form) => openForm(form, "results")} onPreview={previewForm} onRename={renameForm} onPublish={setFormPublished} onComingSoon={(feature) => notify(`${feature} coming soon`)} onSettings={() => navigateToView("settings")} />{toast && <Toast message={toast} />}{shareFormId && forms.find((form) => form.id === shareFormId) && <SharePanel form={forms.find((form) => form.id === shareFormId)!} onClose={() => setShareFormId("")} onCopy={() => void copyShareLink(forms.find((form) => form.id === shareFormId)!)} />}</>;
+  return <><Dashboard forms={filteredForms} totalForms={displayForms.length} responseTotal={displayForms.reduce((sum, form) => sum + form.responses.length, 0)} query={query} onQuery={setQuery} onCreate={createForm} onOpen={openForm} onDuplicate={duplicateForm} onDelete={deleteForm} onShare={shareForm} onResults={(form) => openForm(form, "results")} onPreview={previewForm} onRename={renameForm} onPublish={setFormPublished} onComingSoon={(feature) => notify(`${feature} coming soon`)} onSettings={() => navigateToView("settings")} />{toast && <Toast message={toast} />}{shareFormId && displayForms.find((form) => form.id === shareFormId) && <SharePanel form={displayForms.find((form) => form.id === shareFormId)!} onClose={() => setShareFormId("")} onCopy={() => void copyShareLink(displayForms.find((form) => form.id === shareFormId)!)} />}</>;
 }
 
 function Toast({ message }: { message: string }) { return <div className="toast-message" role="status">{message}</div>; }
