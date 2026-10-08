@@ -9,7 +9,7 @@ from . import database
 
 app = FastAPI(title="Formcraft API", version="1.0.0")
 origins = [origin.strip() for origin in os.getenv("FORMCRAFT_CORS_ORIGINS", "http://localhost:3000").split(",") if origin.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_origin_regex=r"https://[a-zA-Z0-9-]+\.vercel\.app", allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 class FormRecord(BaseModel):
     id: str
