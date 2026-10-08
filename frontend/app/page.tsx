@@ -61,6 +61,8 @@ export default function Home() {
   const [toast, setToast] = useState("");
   const [saveState, setSaveState] = useState<"saved" | "saving" | "local">("saved");
   const [apiReady, setApiReady] = useState(false);
+  const [canonicalApiLoaded, setCanonicalApiLoaded] = useState(false);
+  const apiQueue = useRef<Promise<void>>(Promise.resolve());
   const [preview, setPreview] = useState(false);
   const [responseIndex, setResponseIndex] = useState<number | null>(null);
   const [shareFormId, setShareFormId] = useState("");
@@ -111,7 +113,12 @@ export default function Home() {
         if (!response.ok) throw new Error("The forms API is unavailable.");
         return response.json() as Promise<FormData[]>;
       })
-      .then((data) => { if (mounted) setForms(data.length ? data : localForms.length ? localForms : starterForms); })
+      .then((data) => {
+        if (mounted) {
+          setForms(data.length ? data : localForms.length ? localForms : starterForms);
+          setCanonicalApiLoaded(true);
+        }
+      })
       .catch(() => { if (mounted && localForms.length) setForms(localForms); })
       .finally(() => { if (mounted) setApiReady(true); });
     return () => { mounted = false; };
@@ -119,16 +126,19 @@ export default function Home() {
 
   useEffect(() => {
     localStorage.setItem("formcraft-data", JSON.stringify(forms));
-    if (!apiReady) return;
+    if (!apiReady || !canonicalApiLoaded) return;
     const snapshot = JSON.stringify({ forms });
     const timer = window.setTimeout(() => {
       setSaveState("saving");
-      fetch(`${API}/api/forms/sync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: snapshot })
-        .then((response) => { if (!response.ok) throw new Error("Save failed"); setSaveState("saved"); })
-        .catch(() => setSaveState("local"));
+      const request = apiQueue.current.catch(() => {}).then(async () => {
+        const response = await fetch(`${API}/api/forms/sync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: snapshot });
+        if (!response.ok) throw new Error("Save failed");
+      });
+      apiQueue.current = request;
+      request.then(() => setSaveState("saved")).catch(() => setSaveState("local"));
     }, 280);
     return () => window.clearTimeout(timer);
-  }, [forms, apiReady]);
+  }, [forms, apiReady, canonicalApiLoaded]);
 
   const active = forms.find((form) => form.id === activeId) ?? forms[0];
   const currentQuestion = active?.questions.find((question) => question.id === selectedQuestion) ?? active?.questions[0];
@@ -203,6 +213,14 @@ export default function Home() {
   };
   const deleteForm = (formId: string) => {
     setForms((items) => items.filter((form) => form.id !== formId));
+    if (canonicalApiLoaded) {
+      const request = apiQueue.current.catch(() => {}).then(async () => {
+        const response = await fetch(`${API}/api/forms/${encodeURIComponent(formId)}`, { method: "DELETE" });
+        if (!response.ok && response.status !== 404) throw new Error("Delete failed");
+      });
+      apiQueue.current = request;
+      request.catch(() => setSaveState("local"));
+    }
     notify("Form deleted");
   };
   const addQuestion = (type: QuestionType) => {
@@ -253,14 +271,7 @@ export default function Home() {
     if (!active?.questions.length) { notify("Add a question to preview this form"); return; }
     setPreview(true);
   };
-  const savePreviewResponse = (answers: Record<string, string>) => {
-    if (!active) return;
-    updateForm({ responses: [...active.responses, answers], responseDates: [...(active.responseDates ?? []), new Date().toISOString()] });
-    setPreview(false);
-    notify("Preview response saved");
-  };
-
-  if (preview && active) return <PreviewFlow form={active} onExit={() => setPreview(false)} onComplete={savePreviewResponse} />;
+  if (preview && active) return <PreviewFlow form={active} onExit={() => setPreview(false)} onComplete={() => undefined} />;
   if (view === "builder" && active) return <><Builder
     form={active} question={currentQuestion} saveState={saveState} toast={toast}
     onBack={() => navigateToView("dashboard", active.id, true)} onTitle={(title) => updateForm({ title })}

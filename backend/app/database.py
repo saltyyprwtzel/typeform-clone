@@ -46,12 +46,6 @@ def read_forms():
 
 def sync_forms(forms):
     with connect() as db:
-        incoming = [form["id"] for form in forms]
-        if incoming:
-            marks = ",".join("?" for _ in incoming)
-            db.execute(f"DELETE FROM forms WHERE id NOT IN ({marks})", incoming)
-        else:
-            db.execute("DELETE FROM forms")
         for form in forms:
             db.execute("""INSERT INTO forms(id,title,status,updated,questions_json) VALUES(?,?,?,?,?)
               ON CONFLICT(id) DO UPDATE SET title=excluded.title,status=excluded.status,updated=excluded.updated,questions_json=excluded.questions_json""",
